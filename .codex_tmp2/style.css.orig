@@ -1,0 +1,190 @@
+﻿:root {
+  --bg: #f2f1ed;
+  --panel: #ffffff;
+  --text: #2c2f2f;
+  --muted: #6b6f6f;
+  --accent: #1b6d6f;
+  --border: #d9d6cf;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  background: linear-gradient(180deg, #f2f1ed 0%, #e7e4dd 100%);
+  color: var(--text);
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+header {
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 2rem;
+}
+
+h2 {
+  margin: 0 0 16px;
+  font-size: 1.3rem;
+}
+
+p {
+  margin: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.file-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px dashed var(--border);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #faf9f6;
+  cursor: pointer;
+}
+
+.file-input input {
+  cursor: pointer;
+}
+
+button {
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button.danger {
+  background: #8b2f2f;
+}
+
+button.danger:hover {
+  background: #752626;
+}
+
+input[type="text"] {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+button:hover {
+  background: #15585a;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  margin-top: 10px;
+  color: #1f5f35;
+  font-weight: 600;
+}
+
+.status-ok {
+  color: #1f5f35;
+  font-weight: 600;
+}
+
+.status-error {
+  color: #8b2f2f;
+  font-weight: 600;
+}
+
+.conf-high {
+  color: #1f5f35;
+  font-weight: 600;
+}
+
+.conf-mid {
+  color: #a87400;
+  font-weight: 600;
+}
+
+.conf-low {
+  color: #8b2f2f;
+  font-weight: 600;
+}
+
+.download-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+}
+
+.download-list li {
+  margin-bottom: 6px;
+}
+
+.download-list a,
+.zip-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.download-list a:hover,
+.zip-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 600px) {
+  form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  button {
+    width: 100%;
+  }
+}

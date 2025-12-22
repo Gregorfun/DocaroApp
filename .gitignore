@@ -1,0 +1,24 @@
+﻿# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+
+# Flask / runtime
+instance/
+*.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Docaro runtime data
+data/tmp/
+data/eingang/
+data/fertig/
+data/uploads/
+
+# Secrets
+.env

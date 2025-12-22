@@ -1,0 +1,645 @@
+﻿from __future__ import annotations
+
+import csv
+import json
+import os
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+from pdf2image import convert_from_path
+from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError, PDFSyntaxError
+import pytesseract
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_DATE_FORMAT = "%Y-%m-%d"
+INTERNAL_DATE_FORMAT = "%Y-%m-%d"
+SUPPLIERS_DB_PATH = BASE_DIR / "data" / "suppliers.json"
+
+
+def _resolve_tesseract_path() -> Optional[Path]:
+    env_path = os.getenv("DOCARO_TESSERACT")
+    if env_path:
+        candidate = Path(env_path)
+        if candidate.exists():
+            return candidate
+        print(f"Warnung: DOCARO_TESSERACT verweist auf nichts: {candidate}")
+
+    relative_candidate = BASE_DIR.parent / "Tesseract OCR Windows installer" / "tesseract.exe"
+    if relative_candidate.exists():
+        return relative_candidate
+
+    for candidate in (
+        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+    ):
+        if candidate.exists():
+            return candidate
+
+    if shutil.which("tesseract"):
+        return None
+
+    return None
+
+
+def _resolve_poppler_bin() -> Optional[Path]:
+    env_path = os.getenv("DOCARO_POPPLER_BIN")
+    if env_path:
+        candidate = Path(env_path)
+        if candidate.exists():
+            return candidate
+        print(f"Warnung: DOCARO_POPPLER_BIN verweist auf nichts: {candidate}")
+
+    for folder_name in ("poppler", "Poppler"):
+        candidate = BASE_DIR.parent / folder_name / "Library" / "bin"
+        if candidate.exists():
+            return candidate
+
+    if shutil.which("pdfinfo"):
+        return None
+
+    return None
+
+
+_TESSERACT_PATH = _resolve_tesseract_path()
+if _TESSERACT_PATH is None and not shutil.which("tesseract"):
+    print("Warnung: Tesseract wurde nicht gefunden. OCR kann fehlschlagen.")
+elif _TESSERACT_PATH is None:
+    print("Info: Tesseract im PATH gefunden, kein tesseract_cmd gesetzt.")
+else:
+    pytesseract.pytesseract.tesseract_cmd = str(_TESSERACT_PATH)
+    print(f"Info: Tesseract verwendet: {_TESSERACT_PATH}")
+
+_POPPLER_BIN = _resolve_poppler_bin()
+if _POPPLER_BIN is None and not shutil.which("pdfinfo"):
+    print("Warnung: Poppler/pdfinfo nicht gefunden. PDF-Konvertierung kann fehlschlagen.")
+elif _POPPLER_BIN is None:
+    print("Info: Poppler im PATH gefunden, poppler_path bleibt leer.")
+else:
+    print(f"Info: Poppler verwendet: {_POPPLER_BIN}")
+
+SUPPLIER_KEYWORDS = {
+    "Liebherr-Werk Ehingen": "Liebherr_Ehingen",
+    "Liebherr-Werk Nenzing": "Liebherr_Nenzing",
+    "DB Schenker": "DBSchenker",
+    "DHL Paket": "DHL",
+    "Linde Material Handling": "Linde",
+    "Manitowoc": "Manitowoc",
+    "Pirtek": "Pirtek",
+    "Vergoelst": "Vergoelst",
+    "Tadano": "Tadano",
+    "Georg Zopf": "Zopf",
+    "WM Fahrzeugteile": "WM",
+    "WFI Wireless Funk": "WFI",
+    "Hofmeister & Meincke": "Hofmeister",
+    "F”rch GmbH": "F”rch",
+    "Borgmann": "VW Borgmann",
+    "Fuchs Lubricants Germany GmbH": "Fuchs",
+    "Ortjohann und Kraft Werkzeug und Maschinenhandel GmbH": "Ortjohann+ Kraft",
+    "PV Automotive GmbH": "PV Automotive",
+}
+
+LS_KEYWORDS = [
+    "lieferschein",
+    "delivery note",
+    "lieferdatum",
+    "document date",
+    "tag der lieferung",
+]
+
+MONTH_MAP = {
+    "jan": "01",
+    "januar": "01",
+    "feb": "02",
+    "februar": "02",
+    "mar": "03",
+    "maer": "03",
+    "maerz": "03",
+    "marz": "03",
+    "apr": "04",
+    "april": "04",
+    "mai": "05",
+    "may": "05",
+    "jun": "06",
+    "juni": "06",
+    "jul": "07",
+    "juli": "07",
+    "aug": "08",
+    "august": "08",
+    "sep": "09",
+    "sept": "09",
+    "september": "09",
+    "oct": "10",
+    "okt": "10",
+    "oktober": "10",
+    "nov": "11",
+    "november": "11",
+    "dec": "12",
+    "dez": "12",
+    "dezember": "12",
+}
+
+MONTH_NAME_REGEX = re.compile(r"\b(\d{1,2})[.\s]+([A-Za-z]+)[.\s]+(\d{4})\b", flags=re.IGNORECASE)
+ISO_REGEX = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+DMY_DOT_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
+DMY_DASH_REGEX = re.compile(r"\b(\d{1,2})-(\d{1,2})-(\d{4})\b")
+DMY_SLASH_REGEX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+VERGOELST_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b")
+TADANO_REGEX = re.compile(r"\b(\d{1,2})-([A-Za-z]{3})-(\d{4})\b", flags=re.IGNORECASE)
+
+
+def _has_osd_traineddata() -> bool:
+    tessdata_prefix = os.getenv("TESSDATA_PREFIX")
+    candidates = []
+    if tessdata_prefix:
+        candidates.append(Path(tessdata_prefix) / "osd.traineddata")
+    if _TESSERACT_PATH:
+        candidates.append(_TESSERACT_PATH.parent / "tessdata" / "osd.traineddata")
+    return any(candidate.exists() for candidate in candidates)
+
+
+def _ocr_image(image, rotation: int) -> str:
+    if rotation:
+        image = image.rotate(rotation, expand=True)
+    return pytesseract.image_to_string(image, lang="deu")
+
+
+def _count_keywords(text: str) -> int:
+    lower = text.lower()
+    return sum(lower.count(keyword) for keyword in LS_KEYWORDS)
+
+
+def _score_text(text: str) -> int:
+    alnum_count = sum(1 for ch in text if ch.isalnum())
+    return alnum_count + _count_keywords(text)
+
+
+def _detect_osd_rotation(image) -> Optional[int]:
+    if not _has_osd_traineddata():
+        return None
+    try:
+        osd = pytesseract.image_to_osd(image)
+    except Exception:
+        return None
+    match = re.search(r"Rotate:\s*(\d+)", osd)
+    if not match:
+        return None
+    rotation = int(match.group(1))
+    if rotation in (0, 90, 180, 270):
+        return rotation
+    return None
+
+
+def ocr_first_page(pdf_path: Path, poppler_bin: Optional[Path]) -> Dict[str, str]:
+    try:
+        images = convert_from_path(
+            str(pdf_path),
+            dpi=300,
+            first_page=1,
+            last_page=1,
+            poppler_path=str(poppler_bin) if poppler_bin else None,
+        )
+    except PDFInfoNotInstalledError:
+        return {"text": "", "error": "Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN"}
+    except (PDFPageCountError, PDFSyntaxError) as exc:
+        return {"text": "", "error": f"pdf_read_failed: {exc}"}
+    except Exception as exc:
+        return {"text": "", "error": f"pdf_convert_failed: {exc}"}
+
+    if not images:
+        return {"text": "", "error": "Keine Seiten im PDF gefunden."}
+
+    image = images[0]
+
+    try:
+        text = _ocr_image(image, rotation=0)
+    except Exception as exc:
+        return {"text": "", "error": f"ocr_failed: {exc}"}
+
+    text_length = len(text.strip())
+    has_keywords = _count_keywords(text) > 0
+    needs_rotation = text_length < 200 or not has_keywords
+    if not needs_rotation:
+        return {"text": text, "error": "", "rotation": "0", "rotation_reason": ""}
+
+    rotation_reason = "low_text" if text_length < 200 else "no_keywords"
+    osd_rotation = _detect_osd_rotation(image)
+    if osd_rotation is not None:
+        if osd_rotation == 0:
+            return {
+                "text": text,
+                "error": "",
+                "rotation": "0",
+                "rotation_reason": "osd",
+            }
+        try:
+            rotated_text = _ocr_image(image, rotation=osd_rotation)
+        except Exception as exc:
+            return {"text": "", "error": f"ocr_failed: {exc}"}
+        return {
+            "text": rotated_text,
+            "error": "",
+            "rotation": str(osd_rotation),
+            "rotation_reason": "osd",
+        }
+
+    best_rotation = 0
+    best_text = text
+    best_score = _score_text(text)
+    for rotation in (90, 180, 270):
+        try:
+            rotated_text = _ocr_image(image, rotation=rotation)
+        except Exception:
+            continue
+        score = _score_text(rotated_text)
+        if score > best_score:
+            best_score = score
+            best_rotation = rotation
+            best_text = rotated_text
+
+    return {
+        "text": best_text,
+        "error": "",
+        "rotation": str(best_rotation),
+        "rotation_reason": rotation_reason,
+    }
+
+
+def _normalize_month_key(value: str) -> str:
+    key = value.strip().lower()
+    return key.replace("\u00df", "ss").replace("\u00e4", "ae").replace("\u00f6", "oe").replace("\u00fc", "ue")
+
+
+def _valid_day_month(day: int, month: int) -> bool:
+    return 1 <= day <= 31 and 1 <= month <= 12
+
+
+def _build_date(year: int, month: int, day: int) -> Optional[datetime]:
+    if not _valid_day_month(day, month):
+        return None
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+def _parse_iso(match: re.Match) -> Optional[datetime]:
+    year, month, day = (int(part) for part in match.groups())
+    return _build_date(year, month, day)
+
+
+def _parse_dmy(match: re.Match) -> Optional[datetime]:
+    day, month, year = (int(part) for part in match.groups())
+    return _build_date(year, month, day)
+
+
+def _parse_month_name(match: re.Match) -> Optional[datetime]:
+    day_str, month_name, year_str = match.groups()
+    month_key = _normalize_month_key(month_name)
+    month = MONTH_MAP.get(month_key)
+    if not month:
+        return None
+    return _build_date(int(year_str), int(month), int(day_str))
+
+
+def _parse_vergoelst(match: re.Match) -> Optional[datetime]:
+    day, month, year_short = (int(part) for part in match.groups())
+    if not _valid_day_month(day, month):
+        return None
+    if 0 <= year_short <= 69:
+        year = 2000 + year_short
+    else:
+        year = 1900 + year_short
+    return _build_date(year, month, day)
+
+
+def _parse_tadano(match: re.Match) -> Optional[datetime]:
+    day_str, month_name, year_str = match.groups()
+    month_key = _normalize_month_key(month_name)
+    month = MONTH_MAP.get(month_key)
+    if not month:
+        return None
+    return _build_date(int(year_str), int(month), int(day_str))
+
+
+def _find_first_date(text: str, patterns: List[Tuple[re.Pattern, callable]]) -> Optional[datetime]:
+    best_pos = None
+    best_date = None
+    for pattern, parser in patterns:
+        for match in pattern.finditer(text):
+            parsed = parser(match)
+            if not parsed:
+                continue
+            pos = match.start()
+            if best_pos is None or pos < best_pos:
+                best_pos = pos
+                best_date = parsed
+    return best_date
+
+
+def extract_date(text: str) -> Optional[datetime]:
+    patterns = [
+        (ISO_REGEX, _parse_iso),
+        (DMY_DOT_REGEX, _parse_dmy),
+        (DMY_DASH_REGEX, _parse_dmy),
+        (DMY_SLASH_REGEX, _parse_dmy),
+        (MONTH_NAME_REGEX, _parse_month_name),
+    ]
+    return _find_first_date(text, patterns)
+
+
+def _extract_date_from_lines(lines: List[str]) -> Optional[datetime]:
+    for line in lines:
+        dt = extract_date(line)
+        if dt:
+            return dt
+    return None
+
+
+def _extract_vergoelst_date(lines: List[str]) -> Optional[datetime]:
+    for line in lines:
+        dt = _find_first_date(line, [(VERGOELST_REGEX, _parse_vergoelst)])
+        if dt:
+            return dt
+    return None
+
+
+def _extract_tadano_date(lines: List[str]) -> Optional[datetime]:
+    for line in lines:
+        dt = _find_first_date(line, [(TADANO_REGEX, _parse_tadano)])
+        if dt:
+            return dt
+    return None
+
+
+def extract_date_with_priority(text: str) -> Tuple[Optional[datetime], str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    priorities = [
+        ("lieferdatum", ["lieferdatum", "lieferscheindatum", "datum lieferung", "tag der lieferung"]),
+        ("lieferdatum", ["delivery by date"]),
+        ("beleg-datum", ["beleg-datum", "belegdatum"]),
+        ("versanddatum", ["versanddatum", "versendet am"]),
+        ("rechnungsdatum", ["rechnungsdatum"]),
+        ("bestelldatum", ["bestelldatum"]),
+        ("document_date", ["document date"]),
+    ]
+
+    for source, labels in priorities:
+        for idx, line in enumerate(lines):
+            lower = line.lower()
+            if any(label in lower for label in labels):
+                candidate_lines = [line]
+                if idx + 1 < len(lines):
+                    candidate_lines.append(lines[idx + 1])
+                if source == "beleg-datum":
+                    dt = _extract_vergoelst_date(candidate_lines)
+                elif "delivery by date" in lower or source == "document_date":
+                    dt = _extract_tadano_date(candidate_lines)
+                else:
+                    dt = _extract_date_from_lines(candidate_lines)
+                if dt:
+                    return dt, source
+
+    fallback_date = extract_date(text)
+    return fallback_date, "fallback"
+
+def load_suppliers_db() -> Dict[str, List[Dict[str, object]]]:
+    SUPPLIERS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not SUPPLIERS_DB_PATH.exists():
+        data = {"suppliers": []}
+        SUPPLIERS_DB_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return data
+    try:
+        return json.loads(SUPPLIERS_DB_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"suppliers": []}
+
+
+def save_suppliers_db(data: Dict[str, List[Dict[str, object]]]) -> None:
+    SUPPLIERS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SUPPLIERS_DB_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def normalize_text(value: str) -> str:
+    lowered = value.lower()
+    lowered = lowered.replace("\u00df", "ss").replace("\u00e4", "ae").replace("\u00f6", "oe").replace("\u00fc", "ue")
+    lowered = re.sub(r"[^a-z0-9]+", " ", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def _detect_supplier_from_db(text: str) -> Optional[Tuple[str, str]]:
+    data = load_suppliers_db()
+    normalized_text = normalize_text(text)
+    for entry in data.get("suppliers", []):
+        name = str(entry.get("name", "")).strip()
+        aliases = entry.get("aliases", [])
+        candidates = [name] + [str(alias) for alias in aliases if alias]
+        for alias in candidates:
+            normalized_alias = normalize_text(alias)
+            if normalized_alias and normalized_alias in normalized_text:
+                return name or alias, alias
+    return None
+
+
+def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    top_lines = lines[:40]
+    endings = [
+        "gmbh",
+        "ag",
+        "kg",
+        "gmbh & co",
+        "gmbh & co. kg",
+        "ltd",
+        "inc",
+        "sarl",
+        "bv",
+        "sp. z o.o",
+        "sp z o o",
+    ]
+    address_markers = [
+        "strasse",
+        "street",
+        "postfach",
+        "plz",
+        "de-",
+    ]
+    best_line = None
+    best_score = 0.0
+    for line in top_lines:
+        normalized_line = normalize_text(line)
+        score = 0.0
+        if any(marker in normalized_line for marker in endings):
+            score = 0.8
+        elif any(marker in normalized_line for marker in address_markers):
+            score = 0.5
+        if score > best_score:
+            best_score = score
+            best_line = line
+    if best_line:
+        return best_line, best_line, best_score
+    return None, None, 0.0
+
+
+def detect_supplier(text: str) -> Tuple[str, float, str, str]:
+    lower_text = text.lower()
+    for keyword, shortname in SUPPLIER_KEYWORDS.items():
+        if keyword.lower() in lower_text:
+            return shortname, 0.95, "keywords", keyword
+
+    db_hit = _detect_supplier_from_db(text)
+    if db_hit:
+        supplier_name, alias = db_hit
+        return supplier_name, 0.90, "db", alias
+
+    guess, guess_line, confidence = _heuristic_supplier(text)
+    if guess:
+        return guess, confidence, "heuristic", guess_line or ""
+
+    return "Unbekannt", 0.0, "none", ""
+
+
+def _safe_component(value: str) -> str:
+    cleaned = re.sub(r"[^\w \-]+", "_", value, flags=re.UNICODE).strip()
+    return re.sub(r"\s+", "_", cleaned)
+
+
+def build_new_filename(
+    supplier: str,
+    date_obj: Optional[datetime],
+    date_format: str = DEFAULT_DATE_FORMAT,
+) -> str:
+    if date_obj is not None:
+        date_part = date_obj.strftime(date_format)
+    else:
+        date_part = "unbekanntes-Datum"
+
+    if not supplier:
+        supplier = "Unbekannter_Lieferant"
+
+    safe_supplier = _safe_component(supplier)
+    return f"{safe_supplier}_{date_part}.pdf"
+
+
+def get_unique_path(target_dir: Path, filename: str) -> Path:
+    candidate = target_dir / filename
+    counter = 1
+    while candidate.exists():
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        candidate = target_dir / f"{stem}_{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DATE_FORMAT) -> Dict[str, str]:
+    result: Dict[str, str] = {
+        "supplier": "",
+        "supplier_confidence": "",
+        "supplier_source": "",
+        "supplier_guess_line": "",
+        "date": "",
+        "date_source": "",
+        "out_name": "",
+        "status": "error",
+        "error": "",
+        "tesseract_path": str(_TESSERACT_PATH) if _TESSERACT_PATH else "",
+        "poppler_bin": str(_POPPLER_BIN) if _POPPLER_BIN else "",
+        "ocr_rotation": "",
+        "ocr_rotation_reason": "",
+    }
+
+    ocr_result = ocr_first_page(pdf_path, _POPPLER_BIN)
+    if ocr_result["error"]:
+        result["error"] = ocr_result["error"]
+        return result
+    text = ocr_result["text"]
+    result["ocr_rotation"] = ocr_result.get("rotation", "")
+    result["ocr_rotation_reason"] = ocr_result.get("rotation_reason", "")
+
+    supplier, supplier_confidence, supplier_source, supplier_guess_line = detect_supplier(text)
+    date_obj, date_source = extract_date_with_priority(text)
+    result["supplier"] = supplier
+    result["supplier_confidence"] = f"{supplier_confidence:.2f}" if supplier_confidence else ""
+    result["supplier_source"] = supplier_source
+    result["supplier_guess_line"] = supplier_guess_line
+    result["date"] = date_obj.strftime(INTERNAL_DATE_FORMAT) if date_obj else ""
+    result["date_source"] = date_source if date_obj else ""
+
+    new_filename = build_new_filename(supplier, date_obj, date_format=date_format)
+    target_path = get_unique_path(output_dir, new_filename)
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path.replace(target_path)
+    except Exception as exc:
+        result["error"] = f"move_failed: {exc}"
+        return result
+
+    result["out_name"] = target_path.name
+    result["status"] = "ok"
+    return result
+
+
+def _append_log(log_path: Path, row: Dict[str, str]) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = log_path.exists()
+    with log_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "timestamp",
+                "original",
+                "new",
+                "supplier",
+                "date",
+                "date_source",
+                "status",
+                "error",
+                "tesseract_path",
+                "poppler_bin",
+            ],
+        )
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT_DATE_FORMAT) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    if not input_dir.exists():
+        return results
+
+    log_path = BASE_DIR / "data" / "logs" / "run.csv"
+
+    for pdf_path in sorted(input_dir.glob("*.pdf")):
+        result = process_pdf(pdf_path, output_dir, date_format=date_format)
+        results.append(result)
+        _append_log(
+            log_path,
+            {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "original": pdf_path.name,
+                "new": result.get("out_name", ""),
+                "supplier": result.get("supplier", ""),
+                "date": result.get("date", ""),
+                "date_source": result.get("date_source", ""),
+                "status": result.get("status", ""),
+                "error": result.get("error", ""),
+                "tesseract_path": result.get("tesseract_path", ""),
+                "poppler_bin": result.get("poppler_bin", ""),
+            },
+        )
+
+    return results
+
+
+
+
+
+
+
+
+

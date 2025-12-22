@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="viewer-body">
+    <main class="viewer-shell">
+      <div class="viewer-toolbar">
+        <form action="{{ url_for('confirm_supplier') }}" method="post" class="viewer-form">
+          <span class="viewer-label">Lieferant:</span>
+          <input
+            class="viewer-input"
+            type="text"
+            name="supplier_name"
+            placeholder="Lieferant eingeben"
+            value="{{ supplier if supplier and supplier != 'Unbekannt' and not is_gibberish else '' }}"
+          />
+          <input type="hidden" name="filename" value="{{ filename }}" />
+          <input type="hidden" name="supplier_guess_line" value="{{ supplier_guess_line }}" />
+          <input type="hidden" name="return_to" value="viewer" />
+          {% if supplier_guess_line and not is_gibberish %}
+            <label class="viewer-checkbox">
+              <input type="checkbox" name="alias_from_ocr" value="1" checked />
+              <span>Alias aus OCR-Zeile uebernehmen</span>
+            </label>
+          {% endif %}
+          <button type="submit">Lieferant speichern</button>
+          <a class="viewer-link" href="{{ url_for('index') }}">Zurueck zur Uebersicht</a>
+          {% with messages = get_flashed_messages() %}
+            {% if messages %}
+              <span class="viewer-message">{{ messages[0] }}</span>
+              {% if 'Lieferant gespeichert.' in messages %}
+                <script>
+                  window.addEventListener("DOMContentLoaded", () => {
+                    const input = document.querySelector(".viewer-input");
+                    const supplierName = input && input.value ? input.value.trim() : "Unbekannt";
+                    document.title = `Docaro | ${supplierName} | {{ filename }}`;
+                  });
+                </script>
+              {% endif %}
+            {% endif %}
+          {% endwith %}
+        </form>
+      </div>
+      <div class="viewer-content">
+        <iframe
+          title="PDF"
+          src="{{ url_for('pdf_file', filename=filename) }}"
+          class="viewer-frame"
+        ></iframe>
+      </div>
+    </main>
+  </body>
+</html>

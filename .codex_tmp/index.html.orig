@@ -1,0 +1,100 @@
+﻿<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Docaro OCR-Renamer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Docaro OCR-Renamer</h1>
+        <p>PDFs hochladen, OCR auslesen, umbenennen und herunterladen.</p>
+        {% if reset_done %}
+          <p class="notice">Downloads wurden zurueckgesetzt.</p>
+        {% endif %}
+      </header>
+
+      <section class="panel">
+        <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+          <label class="file-input">
+            <span>PDF-Dateien auswaehlen</span>
+            <input type="file" name="files" accept="application/pdf" multiple />
+          </label>
+          <button type="submit">Upload &amp; Verarbeiten</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Ergebnisse</h2>
+        {% if results is none %}
+          <p class="muted">Noch keine Verarbeitung gestartet.</p>
+        {% elif results|length == 0 %}
+          <p class="muted">Keine gueltigen PDFs gefunden.</p>
+        {% else %}
+          <table>
+            <thead>
+              <tr>
+                <th>Datei</th>
+                <th>Lieferant</th>
+                <th>Quelle</th>
+                <th>Sicherheit</th>
+                <th>Datum</th>
+                <th>Status</th>
+                <th>Fehler</th>
+                <th>Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in results %}
+                {% set conf = item.supplier_confidence|float if item.supplier_confidence else 0 %}
+                <tr>
+                  <td>{{ item.out_name or '-' }}</td>
+                  <td>{{ item.supplier or '-' }}</td>
+                  <td>{{ item.supplier_source or '-' }}</td>
+                  <td class="confidence {% if item.supplier_confidence %}{% if conf >= 0.85 %}conf-high{% elif conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}{% endif %}">
+                    {{ item.supplier_confidence or '-' }}
+                  </td>
+                  <td>{{ item.date or '-' }}</td>
+                  <td class="status {% if item.status == 'ok' %}status-ok{% elif item.status == 'error' %}status-error{% endif %}">{{ item.status }}</td>
+                  <td>{{ item.error or '-' }}</td>
+                  <td>
+                    {% if item.supplier_confidence and item.supplier_confidence|float < 0.85 %}
+                      <form action="{{ url_for('confirm_supplier') }}" method="post" class="inline-form">
+                        <input type="text" name="supplier_name" value="{{ item.supplier }}" />
+                        <input type="hidden" name="alias" value="{{ item.supplier_guess_line }}" />
+                        <button type="submit">Lieferant bestaetigen</button>
+                      </form>
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <h2>Download</h2>
+        <form action="{{ url_for('reset_downloads') }}" method="post" onsubmit="return confirm('Downloads wirklich zuruecksetzen?');">
+          <button type="submit" class="danger">Downloads zuruecksetzen</button>
+        </form>
+        {% if files|length == 0 %}
+          <p class="muted">Noch keine fertigen Dateien.</p>
+        {% else %}
+          <ul class="download-list">
+            {% for file in files %}
+              <li>
+                <a href="{{ url_for('download', filename=file) }}">{{ file }}</a>
+              </li>
+            {% endfor %}
+          </ul>
+          <a class="zip-link" href="{{ url_for('download_all') }}">Alle als ZIP herunterladen</a>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>
