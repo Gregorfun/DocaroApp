@@ -18,68 +18,65 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DATE_FORMAT = "%Y-%m-%d"
 INTERNAL_DATE_FORMAT = "%Y-%m-%d"
 SUPPLIERS_DB_PATH = BASE_DIR / "data" / "suppliers.json"
+OCR_TIMEOUT_SECONDS = int(os.getenv("DOCARO_OCR_TIMEOUT", "20"))
 
 
-def _resolve_tesseract_path() -> Optional[Path]:
-    env_path = os.getenv("DOCARO_TESSERACT")
-    if env_path:
-        candidate = Path(env_path)
-        if candidate.exists():
-            return candidate
-        print(f"Warnung: DOCARO_TESSERACT verweist auf nichts: {candidate}")
+def _has_pdfinfo(bin_dir: Path) -> bool:
+    if not bin_dir or not bin_dir.exists():
+        return False
+    return (bin_dir / "pdfinfo.exe").exists() or (bin_dir / "pdfinfo").exists()
 
-    relative_candidate = BASE_DIR.parent / "Tesseract OCR Windows installer" / "tesseract.exe"
-    if relative_candidate.exists():
-        return relative_candidate
 
-    for candidate in (
+def _resolve_tesseract_cmd() -> Tuple[Optional[Path], bool]:
+    for env_key in ("DOCARO_TESSERACT_CMD", "TESSERACT_CMD", "DOCARO_TESSERACT"):
+        env_path = os.getenv(env_key)
+        if env_path:
+            candidate = Path(env_path)
+            if candidate.exists():
+                return candidate, True
+    fallback_paths = [
+        BASE_DIR / "Tesseract OCR Windows installer" / "tesseract.exe",
         Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
         Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
-    ):
+    ]
+    for candidate in fallback_paths:
         if candidate.exists():
-            return candidate
+            return candidate, True
+    which_path = shutil.which("tesseract")
+    if which_path:
+        return Path(which_path), True
+    return None, False
 
-    if shutil.which("tesseract"):
-        return None
 
-    return None
-
-
-def _resolve_poppler_bin() -> Optional[Path]:
+def _resolve_poppler_bin() -> Tuple[Optional[Path], bool]:
     env_path = os.getenv("DOCARO_POPPLER_BIN")
     if env_path:
         candidate = Path(env_path)
-        if candidate.exists():
-            return candidate
-        print(f"Warnung: DOCARO_POPPLER_BIN verweist auf nichts: {candidate}")
+        if candidate.is_dir() and _has_pdfinfo(candidate):
+            return candidate, True
+        if candidate.is_file() and candidate.name.lower().startswith("pdfinfo"):
+            return candidate.parent, True
 
     for folder_name in ("poppler", "Poppler"):
-        candidate = BASE_DIR.parent / folder_name / "Library" / "bin"
-        if candidate.exists():
-            return candidate
+        candidate = BASE_DIR / folder_name / "Library" / "bin"
+        if _has_pdfinfo(candidate):
+            return candidate, True
 
     if shutil.which("pdfinfo"):
-        return None
+        return None, True
 
-    return None
+    return None, False
 
 
-_TESSERACT_PATH = _resolve_tesseract_path()
-if _TESSERACT_PATH is None and not shutil.which("tesseract"):
-    print("Warnung: Tesseract wurde nicht gefunden. OCR kann fehlschlagen.")
-elif _TESSERACT_PATH is None:
-    print("Info: Tesseract im PATH gefunden, kein tesseract_cmd gesetzt.")
-else:
+_TESSERACT_PATH, _TESSERACT_OK = _resolve_tesseract_cmd()
+if _TESSERACT_OK and _TESSERACT_PATH:
     pytesseract.pytesseract.tesseract_cmd = str(_TESSERACT_PATH)
-    print(f"Info: Tesseract verwendet: {_TESSERACT_PATH}")
+elif not _TESSERACT_OK:
+    print("Warnung: Tesseract wurde nicht gefunden. OCR kann fehlschlagen.")
 
-_POPPLER_BIN = _resolve_poppler_bin()
-if _POPPLER_BIN is None and not shutil.which("pdfinfo"):
+_POPPLER_BIN, _POPPLER_OK = _resolve_poppler_bin()
+if not _POPPLER_OK:
     print("Warnung: Poppler/pdfinfo nicht gefunden. PDF-Konvertierung kann fehlschlagen.")
-elif _POPPLER_BIN is None:
-    print("Info: Poppler im PATH gefunden, poppler_path bleibt leer.")
-else:
-    print(f"Info: Poppler verwendet: {_POPPLER_BIN}")
 
 SUPPLIER_KEYWORDS = {
     "Liebherr-Werk Ehingen": "Liebherr_Ehingen",
@@ -93,19 +90,29 @@ SUPPLIER_KEYWORDS = {
     "Tadano": "Tadano",
     "Georg Zopf": "Zopf",
     "WM Fahrzeugteile": "WM",
+    "WM SE": "WM",
     "WFI Wireless Funk": "WFI",
     "Hofmeister & Meincke": "Hofmeister",
-    "F”rch GmbH": "F”rch",
+    "Foerch GmbH": "Foerch",
     "Borgmann": "VW Borgmann",
     "Fuchs Lubricants Germany GmbH": "Fuchs",
     "Ortjohann und Kraft Werkzeug und Maschinenhandel GmbH": "Ortjohann+ Kraft",
     "PV Automotive GmbH": "PV Automotive",
+    "PV Automotive": "PV Automotive",
+    "Foerch": "Foerch",
+    "Liebherr": "Liebherr",
 }
 
 LS_KEYWORDS = [
     "lieferschein",
     "delivery note",
     "lieferdatum",
+    "lieferscheindatum",
+    "belegdatum",
+    "rechnungsdatum",
+    "auftragsdatum",
+    "warenausgang",
+    "ausgang",
     "document date",
     "tag der lieferung",
 ]
@@ -144,9 +151,13 @@ MONTH_MAP = {
 
 MONTH_NAME_REGEX = re.compile(r"\b(\d{1,2})[.\s]+([A-Za-z]+)[.\s]+(\d{4})\b", flags=re.IGNORECASE)
 ISO_REGEX = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+YMD_SLASH_REGEX = re.compile(r"\b(\d{4})/(\d{2})/(\d{2})\b")
 DMY_DOT_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
 DMY_DASH_REGEX = re.compile(r"\b(\d{1,2})-(\d{1,2})-(\d{4})\b")
 DMY_SLASH_REGEX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+DMY_DOT_SHORT_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b")
+DMY_DASH_SHORT_REGEX = re.compile(r"\b(\d{1,2})-(\d{1,2})-(\d{2})\b")
+DMY_SLASH_SHORT_REGEX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2})\b")
 VERGOELST_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b")
 TADANO_REGEX = re.compile(r"\b(\d{1,2})-([A-Za-z]{3})-(\d{4})\b", flags=re.IGNORECASE)
 
@@ -164,7 +175,7 @@ def _has_osd_traineddata() -> bool:
 def _ocr_image(image, rotation: int) -> str:
     if rotation:
         image = image.rotate(rotation, expand=True)
-    return pytesseract.image_to_string(image, lang="deu")
+    return pytesseract.image_to_string(image, lang="deu", timeout=OCR_TIMEOUT_SECONDS)
 
 
 def _count_keywords(text: str) -> int:
@@ -193,7 +204,7 @@ def _detect_osd_rotation(image) -> Optional[int]:
     return None
 
 
-def ocr_first_page(pdf_path: Path, poppler_bin: Optional[Path]) -> Dict[str, str]:
+def ocr_first_page(pdf_path: Path, poppler_bin: Optional[Path], force_best: bool = False) -> Dict[str, str]:
     try:
         images = convert_from_path(
             str(pdf_path),
@@ -214,16 +225,44 @@ def ocr_first_page(pdf_path: Path, poppler_bin: Optional[Path]) -> Dict[str, str
 
     image = images[0]
 
-    try:
-        text = _ocr_image(image, rotation=0)
-    except Exception as exc:
-        return {"text": "", "error": f"ocr_failed: {exc}"}
+    def _safe_ocr(rotation: int) -> Tuple[str, str, int]:
+        try:
+            text_value = _ocr_image(image, rotation=rotation)
+        except Exception as exc:
+            return "", f"ocr_failed: {exc}", 0
+        return text_value, "", _score_text(text_value)
+
+    if force_best:
+        best_rotation = 0
+        best_text = ""
+        best_score = -1
+        for rotation in (0, 90, 180, 270):
+            text_value, error, score = _safe_ocr(rotation)
+            if error:
+                continue
+            if score > best_score:
+                best_score = score
+                best_rotation = rotation
+                best_text = text_value
+        if best_score < 0:
+            return {"text": "", "error": "ocr_failed: no_rotation"}
+        return {
+            "text": best_text,
+            "error": "",
+            "rotation": str(best_rotation),
+            "rotation_reason": "forced",
+            "score": str(best_score),
+        }
+
+    text, error, base_score = _safe_ocr(rotation=0)
+    if error:
+        return {"text": "", "error": error}
 
     text_length = len(text.strip())
     has_keywords = _count_keywords(text) > 0
     needs_rotation = text_length < 200 or not has_keywords
     if not needs_rotation:
-        return {"text": text, "error": "", "rotation": "0", "rotation_reason": ""}
+        return {"text": text, "error": "", "rotation": "0", "rotation_reason": "", "score": str(base_score)}
 
     rotation_reason = "low_text" if text_length < 200 else "no_keywords"
     osd_rotation = _detect_osd_rotation(image)
@@ -234,27 +273,28 @@ def ocr_first_page(pdf_path: Path, poppler_bin: Optional[Path]) -> Dict[str, str
                 "error": "",
                 "rotation": "0",
                 "rotation_reason": "osd",
+                "score": str(base_score),
             }
         try:
             rotated_text = _ocr_image(image, rotation=osd_rotation)
         except Exception as exc:
             return {"text": "", "error": f"ocr_failed: {exc}"}
+        score = _score_text(rotated_text)
         return {
             "text": rotated_text,
             "error": "",
             "rotation": str(osd_rotation),
             "rotation_reason": "osd",
+            "score": str(score),
         }
 
     best_rotation = 0
     best_text = text
-    best_score = _score_text(text)
+    best_score = base_score
     for rotation in (90, 180, 270):
-        try:
-            rotated_text = _ocr_image(image, rotation=rotation)
-        except Exception:
+        rotated_text, error, score = _safe_ocr(rotation)
+        if error:
             continue
-        score = _score_text(rotated_text)
         if score > best_score:
             best_score = score
             best_rotation = rotation
@@ -265,6 +305,7 @@ def ocr_first_page(pdf_path: Path, poppler_bin: Optional[Path]) -> Dict[str, str
         "error": "",
         "rotation": str(best_rotation),
         "rotation_reason": rotation_reason,
+        "score": str(best_score),
     }
 
 
@@ -293,6 +334,17 @@ def _parse_iso(match: re.Match) -> Optional[datetime]:
 
 def _parse_dmy(match: re.Match) -> Optional[datetime]:
     day, month, year = (int(part) for part in match.groups())
+    return _build_date(year, month, day)
+
+
+def _parse_dmy_short(match: re.Match) -> Optional[datetime]:
+    day, month, year_short = (int(part) for part in match.groups())
+    if not _valid_day_month(day, month):
+        return None
+    if 0 <= year_short <= 69:
+        year = 2000 + year_short
+    else:
+        year = 1900 + year_short
     return _build_date(year, month, day)
 
 
@@ -343,9 +395,13 @@ def _find_first_date(text: str, patterns: List[Tuple[re.Pattern, callable]]) -> 
 def extract_date(text: str) -> Optional[datetime]:
     patterns = [
         (ISO_REGEX, _parse_iso),
+        (YMD_SLASH_REGEX, _parse_iso),
         (DMY_DOT_REGEX, _parse_dmy),
         (DMY_DASH_REGEX, _parse_dmy),
         (DMY_SLASH_REGEX, _parse_dmy),
+        (DMY_DOT_SHORT_REGEX, _parse_dmy_short),
+        (DMY_DASH_SHORT_REGEX, _parse_dmy_short),
+        (DMY_SLASH_SHORT_REGEX, _parse_dmy_short),
         (MONTH_NAME_REGEX, _parse_month_name),
     ]
     return _find_first_date(text, patterns)
@@ -377,31 +433,67 @@ def _extract_tadano_date(lines: List[str]) -> Optional[datetime]:
 
 def extract_date_with_priority(text: str) -> Tuple[Optional[datetime], str]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    priorities = [
-        ("lieferdatum", ["lieferdatum", "lieferscheindatum", "datum lieferung", "tag der lieferung"]),
-        ("lieferdatum", ["delivery by date"]),
-        ("beleg-datum", ["beleg-datum", "belegdatum"]),
-        ("versanddatum", ["versanddatum", "versendet am"]),
-        ("rechnungsdatum", ["rechnungsdatum"]),
-        ("bestelldatum", ["bestelldatum"]),
-        ("document_date", ["document date"]),
-    ]
 
-    for source, labels in priorities:
+    def _extract_for_labels(
+        labels: List[str],
+        extractor=_extract_date_from_lines,
+        exclude: Optional[List[str]] = None,
+    ) -> Optional[datetime]:
         for idx, line in enumerate(lines):
             lower = line.lower()
             if any(label in lower for label in labels):
+                if exclude and any(block in lower for block in exclude):
+                    continue
                 candidate_lines = [line]
                 if idx + 1 < len(lines):
                     candidate_lines.append(lines[idx + 1])
-                if source == "beleg-datum":
-                    dt = _extract_vergoelst_date(candidate_lines)
-                elif "delivery by date" in lower or source == "document_date":
-                    dt = _extract_tadano_date(candidate_lines)
-                else:
-                    dt = _extract_date_from_lines(candidate_lines)
-                if dt:
-                    return dt, source
+                return extractor(candidate_lines)
+        return None
+
+    abholdatum_labels = ["abholdatum", "abhol-datum"]
+    has_abholdatum = any(any(label in line.lower() for label in abholdatum_labels) for line in lines)
+    if has_abholdatum:
+        abhol_date = _extract_for_labels(abholdatum_labels)
+        if not abhol_date:
+            auftrags_date = _extract_for_labels(["auftragsdatum"])
+            if auftrags_date:
+                return auftrags_date, "auftragsdatum"
+
+    generic_excludes = [
+        "auftragsdatum",
+        "lieferdatum",
+        "lieferscheindatum",
+        "belegdatum",
+        "beleg-datum",
+        "rechnungsdatum",
+        "bestelldatum",
+        "versanddatum",
+        "abholdatum",
+        "abhol-datum",
+        "warenausgang",
+        "ausgang",
+        "delivery by date",
+    ]
+    priorities = [
+        ("lieferdatum", ["lieferdatum", "lieferscheindatum", "datum lieferung", "tag der lieferung"]),
+        ("lieferdatum", ["warenausgang", "ausgang", "ausgangsdatum"]),
+        ("lieferdatum", ["delivery by date"], _extract_tadano_date),
+        ("belegdatum", ["beleg-datum", "belegdatum"], _extract_vergoelst_date),
+        ("belegdatum", ["rechnungsdatum"]),
+        ("datum", ["document date"], _extract_tadano_date),
+        ("datum", ["document date"], _extract_date_from_lines),
+        ("datum", ["datum"], _extract_date_from_lines, generic_excludes),
+        ("auftragsdatum", ["auftragsdatum"]),
+    ]
+
+    for source, labels, *maybe_extractor in priorities:
+        extractor = maybe_extractor[0] if maybe_extractor else _extract_date_from_lines
+        excludes = None
+        if len(maybe_extractor) > 1:
+            excludes = maybe_extractor[1]
+        dt = _extract_for_labels(labels, extractor=extractor, exclude=excludes)
+        if dt:
+            return dt, source
 
     fallback_date = extract_date(text)
     return fallback_date, "fallback"
@@ -447,6 +539,15 @@ def _detect_supplier_from_db(text: str) -> Optional[Tuple[str, str]]:
 def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     top_lines = lines[:40]
+    blocked_terms = [
+        "datum der uebergabe",
+        "uebergabe",
+        "kommissionierliste",
+        "lieferadresse",
+        "rechnungsadresse",
+        "lieferanschrift",
+        "lieferschein",
+    ]
     endings = [
         "gmbh",
         "ag",
@@ -466,34 +567,56 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
         "postfach",
         "plz",
         "de-",
+        "d-",
+    ]
+    contact_markers = [
+        "tel",
+        "telefon",
+        "fax",
+        "ust",
+        "ust-id",
+        "ustid",
+        "ustidnr",
+        "steuer",
+        "email",
+        "mail",
+        "web",
+        "www",
     ]
     best_line = None
     best_score = 0.0
     for line in top_lines:
         normalized_line = normalize_text(line)
+        if not normalized_line or any(term in normalized_line for term in blocked_terms):
+            continue
         score = 0.0
         if any(marker in normalized_line for marker in endings):
-            score = 0.8
-        elif any(marker in normalized_line for marker in address_markers):
-            score = 0.5
+            score += 0.9
+        if any(marker in normalized_line for marker in contact_markers):
+            score += 0.4
+        if any(marker in normalized_line for marker in address_markers):
+            score += 0.25
+        digit_ratio = sum(1 for ch in normalized_line if ch.isdigit()) / max(len(normalized_line), 1)
+        if digit_ratio > 0.35:
+            score -= 0.2
         if score > best_score:
             best_score = score
             best_line = line
-    if best_line:
-        return best_line, best_line, best_score
+    if best_line and best_score >= 0.7:
+        return best_line, best_line, min(best_score, 1.0)
     return None, None, 0.0
 
 
 def detect_supplier(text: str) -> Tuple[str, float, str, str]:
-    lower_text = text.lower()
-    for keyword, shortname in SUPPLIER_KEYWORDS.items():
-        if keyword.lower() in lower_text:
-            return shortname, 0.95, "keywords", keyword
-
     db_hit = _detect_supplier_from_db(text)
     if db_hit:
         supplier_name, alias = db_hit
         return supplier_name, 0.90, "db", alias
+
+    lower_text = text.lower()
+    for keyword, shortname in SUPPLIER_KEYWORDS.items():
+        if keyword.lower() in lower_text:
+            return shortname, 0.95, "keywords", keyword
 
     guess, guess_line, confidence = _heuristic_supplier(text)
     if guess:
@@ -553,7 +676,7 @@ def build_new_filename(
         date_part = "unbekanntes-Datum"
 
     if not supplier:
-        supplier = "Unbekannter_Lieferant"
+        supplier = "Unbekannt"
 
     safe_supplier = sanitize_filename(supplier)
     safe_supplier = _truncate_with_hash(safe_supplier, max_supplier_len)
@@ -597,18 +720,24 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "error": "",
         "tesseract_path": str(_TESSERACT_PATH) if _TESSERACT_PATH else "",
         "poppler_bin": str(_POPPLER_BIN) if _POPPLER_BIN else "",
+        "tesseract_status": "ok" if _TESSERACT_OK else "not_found",
+        "poppler_status": "ok" if _POPPLER_OK else "not_found",
         "ocr_rotation": "",
         "ocr_rotation_reason": "",
+        "rotate_hint": "",
+        "parsing_failed": False,
     }
 
-    ocr_result = ocr_first_page(pdf_path, _POPPLER_BIN)
+    ocr_result = ocr_first_page(pdf_path, _POPPLER_BIN, force_best=True)
+    text = ""
     if ocr_result["error"]:
         result["error"] = ocr_result["error"]
-        return result
-    text = ocr_result["text"]
+        result["parsing_failed"] = True
+    else:
+        text = ocr_result["text"]
     result["ocr_rotation"] = ocr_result.get("rotation", "")
     result["ocr_rotation_reason"] = ocr_result.get("rotation_reason", "")
-
+    result["rotate_hint"] = result["ocr_rotation"]
     supplier, supplier_confidence, supplier_source, supplier_guess_line = detect_supplier(text)
     gibberish = False
     if supplier_source == "heuristic" and _is_ocr_gibberish(supplier_guess_line or supplier):
@@ -691,6 +820,7 @@ def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT
 
     for pdf_path in sorted(input_dir.glob("*.pdf")):
         result = process_pdf(pdf_path, output_dir, date_format=date_format)
+        result["original"] = pdf_path.name
         results.append(result)
         _append_log(
             log_path,

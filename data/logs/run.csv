@@ -157,3 +157,257 @@ timestamp,original,new,supplier,date,status,error
 2025-12-22T14:04:35,scan_20251126052926.pdf,Fuchs_18.11.2025.pdf,Fuchs,2025-11-18,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
 2025-12-22T14:04:42,scan_20251126052959.pdf,Pirtek_24.11.2025.pdf,Pirtek,2025-11-24,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
 2025-12-22T14:04:46,scan_20251126053147.pdf,Ortjohann_und_Kraft_Werkzeug-_und_c5de6a_17.11.2025.pdf,"Ortjohann und Kraft Werkzeug- und Maschinenhandel GmbH, Siemensstraße 6. 3",2025-11-17,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:35:02,scan_20251126052812.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:02,scan_20251126052848.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:02,scan_20251126052926.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:02,scan_20251126052959.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:02,scan_20251126053147.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:03,scan_20251127053019.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:03,scan_20251127053050.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:03,scan_20251127053135.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:35:03,scan_20251127053216.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T05:37:49,scan_20251124063927.pdf,WM_unbekanntes-Datum.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:37:58,scan_20251124063950.pdf,Förch_2025-11-20.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:38:04,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:38:09,scan_20251126052642.pdf,Vergoelst_2025-11-25.pdf,Vergoelst,2025-11-25,beleg-datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:38:13,scan_20251126052720.pdf,PV_Automotive_2025-11-25.pdf,PV Automotive,2025-11-25,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:38:17,scan_20251126052748.pdf,Liebherr_Ehingen_2025-11-20.pdf,Liebherr_Ehingen,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:38:22,scan_20251126052812.pdf,PV_Automotive_2025-11-24.pdf,PV Automotive,2025-11-24,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T05:38:26,scan_20251126052848.pdf,Förch_2025-11-20_1.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:14,scan_20251124063825.pdf,PV_Automotive_21.11.2025.pdf,PV Automotive,2025-11-21,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:19,scan_20251124063858.pdf,Tadano_20.11.2025.pdf,Tadano,2025-11-20,document_date,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:29,scan_20251124063927.pdf,WM_unbekanntes-Datum.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:39,scan_20251124063950.pdf,Förch_20.11.2025.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:48,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:54,scan_20251126052642.pdf,Vergoelst_25.11.2025.pdf,Vergoelst,2025-11-25,beleg-datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:27:58,scan_20251126052720.pdf,PV_Automotive_25.11.2025.pdf,PV Automotive,2025-11-25,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:28:03,scan_20251126052748.pdf,Liebherr_Ehingen_20.11.2025.pdf,Liebherr_Ehingen,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:28:09,scan_20251126052812.pdf,PV_Automotive_24.11.2025.pdf,PV Automotive,2025-11-24,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T06:28:14,scan_20251126052848.pdf,Förch_20.11.2025_1.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:50:56,scan_20251124062752.pdf,Fuchs_20.11.2025.pdf,Fuchs,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:51:20,scan_20251124063106.pdf,Datum_der_Übergabe_Tag_Monat_Jahr_73e757_unbekanntes-Datum.pdf,"Datum der Übergabe (Tag, Monat, Jahr) Datum der Übernahme (Tag, Monat, Jahr) Datum der Annahme (Tag, Monat, Jahr)",,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:51:23,scan_20251124063139.pdf,Förch_20.11.2025.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:51:31,scan_20251124063727.pdf,Fuchs_20.11.2025_1.pdf,Fuchs,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:51:35,scan_20251124063825.pdf,PV_Automotive_21.11.2025.pdf,PV Automotive,2025-11-21,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:51:40,scan_20251124063858.pdf,Tadano_20.11.2025.pdf,Tadano,2025-11-20,document_date,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:51:59,scan_20251124063927.pdf,WM_unbekanntes-Datum.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:52:08,scan_20251124063950.pdf,Förch_20.11.2025_1.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:52:27,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:52:32,scan_20251126052642.pdf,Vergoelst_25.11.2025.pdf,Vergoelst,2025-11-25,beleg-datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:52:37,scan_20251126052720.pdf,PV_Automotive_25.11.2025.pdf,PV Automotive,2025-11-25,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:52:41,scan_20251126052748.pdf,Liebherr_Ehingen_20.11.2025.pdf,Liebherr_Ehingen,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:52:46,scan_20251126052812.pdf,PV_Automotive_24.11.2025.pdf,PV Automotive,2025-11-24,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:54:05,scan_20251124062752.pdf,Fuchs_20.11.2025.pdf,Fuchs,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:54:30,scan_20251124063106.pdf,Datum_der_Übergabe_Tag_Monat_Jahr_73e757_unbekanntes-Datum.pdf,"Datum der Übergabe (Tag, Monat, Jahr) Datum der Übernahme (Tag, Monat, Jahr) Datum der Annahme (Tag, Monat, Jahr)",,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:54:34,scan_20251124063139.pdf,Förch_20.11.2025.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:54:42,scan_20251124063727.pdf,Fuchs_20.11.2025_1.pdf,Fuchs,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:54:46,scan_20251124063825.pdf,PV_Automotive_21.11.2025.pdf,PV Automotive,2025-11-21,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:54:51,scan_20251124063858.pdf,Tadano_20.11.2025.pdf,Tadano,2025-11-20,document_date,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:09,scan_20251124063927.pdf,WM_unbekanntes-Datum.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:18,scan_20251124063950.pdf,Förch_20.11.2025_1.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:36,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:41,scan_20251126052642.pdf,Vergoelst_25.11.2025.pdf,Vergoelst,2025-11-25,beleg-datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:46,scan_20251126052720.pdf,PV_Automotive_25.11.2025.pdf,PV Automotive,2025-11-25,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:50,scan_20251126052748.pdf,Liebherr_Ehingen_20.11.2025.pdf,Liebherr_Ehingen,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T07:55:56,scan_20251126052812.pdf,PV_Automotive_24.11.2025.pdf,PV Automotive,2025-11-24,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:18:55,scan_20251120064654.pdf,Unbekannt_unbekanntes-Datum.pdf,Unbekannt,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:00,scan_20251120131519.pdf,Liebherr_Ehingen_19.11.2025.pdf,Liebherr_Ehingen,2025-11-19,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:06,scan_20251124062752.pdf,Fuchs_20.11.2025.pdf,Fuchs,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:26,scan_20251124063106.pdf,Datum_der_Übergabe_Tag_Monat_Jahr_73e757_unbekanntes-Datum.pdf,"Datum der Übergabe (Tag, Monat, Jahr) Datum der Übernahme (Tag, Monat, Jahr) Datum der Annahme (Tag, Monat, Jahr)",,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:29,scan_20251124063139.pdf,Förch_20.11.2025.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:36,scan_20251124063727.pdf,Fuchs_20.11.2025_1.pdf,Fuchs,2025-11-20,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:39,scan_20251124063825.pdf,PV_Automotive_21.11.2025.pdf,PV Automotive,2025-11-21,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:19:43,scan_20251124063858.pdf,Tadano_20.11.2025.pdf,Tadano,2025-11-20,document_date,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:20:00,scan_20251124063927.pdf,WM_unbekanntes-Datum.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T11:20:08,scan_20251124063950.pdf,Förch_20.11.2025_1.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:45:37,scan_20251126052720.pdf,PV_Automotive_2025-11-25.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:45:50,scan_20251126052748.pdf,Liebherr_Ehingen_2025-11-20.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:46:04,scan_20251126052812.pdf,PV_Automotive_2025-11-24.pdf,PV Automotive,2025-11-24,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:46:18,scan_20251126052848.pdf,Förch_2025-11-20.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:46:32,scan_20251126052926.pdf,Fuchs_2025-11-18.pdf,Fuchs,2025-11-18,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:46:42,scan_20251126052959.pdf,Pirtek_2025-11-24.pdf,Pirtek,2025-11-24,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:46:54,scan_20251126053147.pdf,SNOyIsEeN_IN_-_99_Blagza_y_yuegsy_ba5d67_unbekanntes-Datum.pdf,SNOyIsEeN IN - 99 Blagzaıy yuegsyoN uueyoluoWld  IL-SL6LE/PF IT (I) EH+ Xe4 2 HAWH jopueyuaulyoseyy pun,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:47:04,scan_20251127053019.pdf,WM_unbekanntes-Datum_1.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:47:19,scan_20251127053050.pdf,Hofmeister_2025-11-25.pdf,Hofmeister,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:47:32,scan_20251127053135.pdf,PV_Automotive_2025-11-26.pdf,PV Automotive,2025-11-26,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T12:47:45,scan_20251127053216.pdf,PV_Automotive_2025-11-26_1.pdf,PV Automotive,2025-11-26,fallback,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T13:48:19,scan_20251124063825.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:19,scan_20251124063858.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251124063927.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251124063950.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251124115937.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251126052642.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251126052720.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251126052748.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:20,scan_20251126052812.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251120053230.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251120054156.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251120054226.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251120064654.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251120131519.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124062752.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124063106.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124063139.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124063727.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124063825.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124063825_1.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:48:59,scan_20251124063858.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251124063858_1.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251124063927.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251124063927_1.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251124063950.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251124063950_1.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251124115937.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251126052642.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251126052720.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251126052748.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T13:49:00,scan_20251126052812.pdf,,,,,error,Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN,,
+2025-12-23T14:10:26,scan.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:28,scan_20251120053230.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:30,scan_20251120054156.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:32,scan_20251120054226.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:34,scan_20251120064654.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:35,scan_20251120131519.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:37,scan_20251124062752.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:39,scan_20251124063106.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:41,scan_20251124063106_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:43,scan_20251124063139.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:44,scan_20251124063139_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:46,scan_20251124063727.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:48,scan_20251124063727_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:50,scan_20251124063825.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:51,scan_20251124063825_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:53,scan_20251124063825_2.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:55,scan_20251124063858.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:57,scan_20251124063858_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:10:59,scan_20251124063858_2.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:00,scan_20251124063927.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:02,scan_20251124063927_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:04,scan_20251124063927_2.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:06,scan_20251124063950.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:07,scan_20251124063950_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:09,scan_20251124063950_2.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:11,scan_20251124115937.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:13,scan_20251124115937_1.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:15,scan_20251126052642.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:16,scan_20251126052720.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:18,scan_20251126052748.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T14:11:20,scan_20251126052812.pdf,,,,,error,ocr_failed: no_rotation,,D:\Docaro\poppler\Library\bin
+2025-12-23T15:19:35,scan.pdf,Förch_17.11.2025.pdf,Förch,2025-11-17,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:19:49,scan_20251120053230.pdf,Manitowoc_13.11.2025.pdf,Manitowoc,2025-11-13,belegdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:20:01,scan_20251120054156.pdf,7_ogerysyaeweßue_ISTZIEUH_2_YUeun_cf2b41_unbekanntes-Datum.pdf,7£ ogerysyaeweßue] ISTZIEUH 2 YUeunop WIoeypsug OOTSBE-ZTOZ TOZ 6h7+ 3 HE agensyolreweßue FE,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:20:12,scan_20251120054226.pdf,Pirtek_19.11.2025.pdf,Pirtek,2025-11-19,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:20:21,scan_20251120064654.pdf,Unbekannt_unbekanntes-Datum_1.pdf,Unbekannt,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:20:35,scan_20251120131519.pdf,Liebherr_Ehingen_19.11.2025_1.pdf,Liebherr_Ehingen,2025-11-19,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:20:46,scan_20251124062752.pdf,Fuchs_20.11.2025_2.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:21:00,scan_20251124063106.pdf,es_Franz_Bracht_Kran_Vermietun_5-_338365_unbekanntes-Datum.pdf,es |Franz Bracht Kran Vermietun 5-Resyoling GmbH,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:21:13,scan_20251124063106_1.pdf,es_Franz_Bracht_Kran_Vermietun_5-_338365_unbekanntes-Datum_1.pdf,es |Franz Bracht Kran Vermietun 5-Resyoling GmbH,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:21:21,scan_20251124063139.pdf,Förch_20.11.2025_2.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:21:29,scan_20251124063139_1.pdf,Förch_20.11.2025_3.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:21:37,scan_20251124063139_2.pdf,Förch_20.11.2025_4.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:21:49,scan_20251124063727.pdf,Fuchs_20.11.2025_3.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:22:01,scan_20251124063727_1.pdf,Fuchs_20.11.2025_4.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:22:12,scan_20251124063727_2.pdf,Fuchs_20.11.2025_5.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:22:24,scan_20251124063825.pdf,usSJepTTajsag_unbekanntes-Datum.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:22:35,scan_20251124063825_1.pdf,usSJepTTajsag_unbekanntes-Datum_1.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:22:47,scan_20251124063825_2.pdf,usSJepTTajsag_unbekanntes-Datum_2.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:22:59,scan_20251124063825_3.pdf,usSJepTTajsag_unbekanntes-Datum_3.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:23:11,scan_20251124063858.pdf,Tadano_unbekanntes-Datum.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:23:23,scan_20251124063858_1.pdf,Tadano_unbekanntes-Datum_1.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:23:36,scan_20251124063858_2.pdf,Tadano_unbekanntes-Datum_2.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:23:48,scan_20251124063858_3.pdf,Tadano_unbekanntes-Datum_3.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:23:51,scan_20251124063139.pdf,Förch_20.11.2025_5.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:23:59,scan_20251124063927.pdf,WM_unbekanntes-Datum_1.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:05,scan_20251124063727.pdf,Fuchs_20.11.2025_6.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:09,scan_20251124063927_1.pdf,WM_unbekanntes-Datum_2.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:18,scan_20251124063825.pdf,usSJepTTajsag_unbekanntes-Datum_4.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:19,scan_20251124063927_2.pdf,WM_unbekanntes-Datum_3.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:26,scan_20251124063825.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063825.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:29,scan_20251124063927_3.pdf,WM_unbekanntes-Datum_4.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:31,scan_20251124063858.pdf,Tadano_unbekanntes-Datum_4.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:31,scan_20251124063858_3.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063858_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:31,scan_20251124063927.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:31,scan_20251124063927_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:31,scan_20251124063927_2.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:31,scan_20251124063927_3.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:40,scan_20251124063858.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063858.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:40,scan_20251124063950.pdf,Förch_20.11.2025_6.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:40,scan_20251124063927_2.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:40,scan_20251124063927_3.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:41,scan_20251124063927_4.pdf,WM_unbekanntes-Datum_5.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:41,scan_20251124063950.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:50,scan_20251124063927_4.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063927_4.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:50,scan_20251124063950.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:51,scan_20251124063950_1.pdf,Förch_20.11.2025_7.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:24:52,scan_20251124063950_1.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:02,scan_20251124063950_1.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:03,scan_20251124063950_2.pdf,Förch_20.11.2025_8.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:05,scan_20251124063950_2.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:15,scan_20251124063950_2.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:16,scan_20251124063950_3.pdf,Förch_20.11.2025_9.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:18,scan_20251124063950_3.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:19,scan.pdf,Förch_17.11.2025_1.pdf,Förch,2025-11-17,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:19,scan_20251124063950_3.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:31,scan_20251124063950_3.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:32,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:34,scan_20251124063950_4.pdf,Förch_20.11.2025_10.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:34,scan_20251124115937.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:35,scan_20251124063950_4.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_4.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:35,scan_20251124115937.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:46,scan_20251124063950_4.pdf,,Unbekannt,2025-11-20,lieferdatum,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124063950_4.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_20.11.2025.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:46,scan_20251124115937.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:47,scan_20251124115937_1.pdf,ASM_Liste_unbekanntes-Datum_1.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:49,scan_20251124115937_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:50,scan_20251124115937_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:25:59,scan_20251124115937_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:01,scan_20251124115937_2.pdf,ASM_Liste_unbekanntes-Datum_2.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:03,scan_20251124115937_2.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:04,scan_20251124115937_2.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:15,scan_20251124115937_2.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_2.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:18,scan_20251124115937_3.pdf,ASM_Liste_unbekanntes-Datum_3.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:19,scan_20251124115937_3.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:26,scan_20251126052642.pdf,WM_unbekanntes-Datum_6.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:33,scan_20251124115937_3.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_3.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:39,scan_20251124115937_4.pdf,ASM_Liste_unbekanntes-Datum_4.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:39,scan_20251126052642.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251126052642.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:46,scan_20251126052642.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251126052642.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:49,scan_20251124115937_4.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251124115937_4.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:49,scan_20251126052642.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251126052642.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:26:51,scan_20251126052642_1.pdf,WM_unbekanntes-Datum_7.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:27:01,scan_20251126052642_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251126052642_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:27:08,scan_20251126052642_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251126052642_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:27:09,scan_20251126052720.pdf,PV_Automotive_25.11.2025.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-23T15:27:11,scan_20251126052642_1.pdf,,Unbekannt,,,error,move_failed: [WinError 2] Das System kann die angegebene Datei nicht finden: 'D:\\Docaro\\data\\eingang\\scan_20251126052642_1.pdf' -> 'D:\\Docaro\\data\\fertig\\Unbekannt_unbekanntes-Datum_2.pdf',D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:48:55,scan_20251124063727.pdf,Fuchs_20.11.2025_7.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:49:08,scan_20251124063825.pdf,usSJepTTajsag_unbekanntes-Datum_5.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:49:22,scan_20251124063858.pdf,Tadano_unbekanntes-Datum_5.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:49:31,scan_20251124063927.pdf,WM_unbekanntes-Datum_8.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:49:42,scan_20251124063950.pdf,Förch_20.11.2025_11.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:49:53,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum_5.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:50:09,scan_20251126052642.pdf,WM_unbekanntes-Datum_9.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:50:26,scan_20251126052642_2.pdf,WM_unbekanntes-Datum_10.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:50:43,scan_20251126052642_3.pdf,WM_unbekanntes-Datum_11.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:50:57,scan_20251126052720.pdf,PV_Automotive_25.11.2025_1.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:51:11,scan_20251126052720_1.pdf,PV_Automotive_25.11.2025_2.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:51:25,scan_20251126052720_2.pdf,PV_Automotive_25.11.2025_3.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:51:40,scan_20251126052720_3.pdf,PV_Automotive_25.11.2025_4.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:51:52,scan_20251126052748.pdf,Liebherr_Ehingen_20.11.2025.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:52:05,scan_20251126052748_1.pdf,Liebherr_Ehingen_20.11.2025_1.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:52:20,scan_20251126052748_2.pdf,Liebherr_Ehingen_20.11.2025_2.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:52:33,scan_20251126052748_3.pdf,Liebherr_Ehingen_20.11.2025_3.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:52:46,scan_20251126052748_4.pdf,Liebherr_Ehingen_20.11.2025_4.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:53:00,scan_20251126052812.pdf,PV_Automotive_24.11.2025.pdf,PV Automotive,2025-11-24,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:53:13,scan_20251126052812_1.pdf,PV_Automotive_24.11.2025_1.pdf,PV Automotive,2025-11-24,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:53:26,scan_20251126052812_2.pdf,PV_Automotive_24.11.2025_2.pdf,PV Automotive,2025-11-24,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T20:53:40,scan_20251126052848.pdf,Förch_20.11.2025_12.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:51:11,scan_20251124063139.pdf,Förch_20.11.2025_13.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:51:23,scan_20251124063727.pdf,Fuchs_20.11.2025_8.pdf,Fuchs,2025-11-20,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:51:34,scan_20251124063825.pdf,usSJepTTajsag_unbekanntes-Datum_6.pdf,usSJepTTajsag,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:51:48,scan_20251124063858.pdf,Tadano_unbekanntes-Datum_6.pdf,Tadano,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:51:56,scan_20251124063927.pdf,WM_unbekanntes-Datum_12.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:52:06,scan_20251124063950.pdf,Förch_20.11.2025_14.pdf,Förch,2025-11-20,lieferdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:52:16,scan_20251124115937.pdf,ASM_Liste_unbekanntes-Datum_6.pdf,ASM Liste,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:52:32,scan_20251126052642.pdf,WM_unbekanntes-Datum_13.pdf,WM,,,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:52:44,scan_20251126052720.pdf,PV_Automotive_25.11.2025_5.pdf,PV Automotive,2025-11-25,datum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin
+2025-12-24T21:52:56,scan_20251126052748.pdf,Liebherr_Ehingen_20.11.2025_5.pdf,Liebherr_Ehingen,2025-11-20,auftragsdatum,ok,,D:\Docaro\Tesseract OCR Windows installer\tesseract.exe,D:\Docaro\poppler\Library\bin

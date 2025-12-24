@@ -14,11 +14,11 @@
           <input
             class="viewer-input"
             type="text"
-            name="supplier_name"
+            name="supplier_input"
             placeholder="Lieferant eingeben"
             value="{{ supplier if supplier and supplier != 'Unbekannt' else '' }}"
           />
-          <input type="hidden" name="filename" value="{{ filename }}" />
+          <input type="hidden" name="file_id" value="{{ file_id }}" />
           <input type="hidden" name="supplier_guess_line" value="{{ supplier_guess_line }}" />
           <input type="hidden" name="return_to" value="viewer" />
           {% if supplier_guess_line %}
@@ -29,7 +29,7 @@
           {% endif %}
           <button type="submit">Speichern</button>
           <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurueck zur Uebersicht</a>
-          <a class="viewer-link" href="{{ url_for('review_next', current=filename) }}">Weiter (naechste Unbekannte)</a>
+          <a class="viewer-link" href="{{ url_for('review_next', current=file_id) }}">Weiter (naechste Unvollstaendige)</a>
           {% if review_total %}
             <span class="viewer-badge">Review {{ review_index or 1 }}/{{ review_total }}</span>
           {% endif %}
@@ -48,12 +48,38 @@
             {% endif %}
           {% endwith %}
         </form>
+        <form action="{{ url_for('confirm_date_from_view') }}" method="post" class="viewer-form viewer-date-form">
+          <span class="viewer-label">Datum festlegen</span>
+          <input
+            class="viewer-input viewer-date-input"
+            type="text"
+            name="date_input"
+            placeholder="TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD"
+            value="{{ date_value or '' }}"
+          />
+          <select class="viewer-select" name="date_fmt">
+            <option value="%Y-%m-%d" {% if date_fmt == "%Y-%m-%d" %}selected{% endif %}>ISO (YYYY-MM-DD)</option>
+            <option value="%d.%m.%Y" {% if date_fmt == "%d.%m.%Y" %}selected{% endif %}>Deutsch (DD.MM.YYYY)</option>
+            <option value="%d-%m-%Y" {% if date_fmt == "%d-%m-%Y" %}selected{% endif %}>Deutsch mit Bindestrich (DD-MM-YYYY)</option>
+          </select>
+          <input type="hidden" name="file_id" value="{{ file_id }}" />
+          <button type="submit">Datum speichern</button>
+          {% if date_error %}
+            <span class="viewer-error">{{ date_error }}</span>
+          {% endif %}
+        </form>
       </div>
+      {% if pdf_missing %}
+        <div class="viewer-error-banner">
+          <span>Datei nicht gefunden. Bitte zurueck zur Uebersicht.</span>
+          <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurueck zur Uebersicht</a>
+        </div>
+      {% endif %}
       <div class="viewer-content">
         <iframe
           title="PDF"
-          src="{{ url_for('raw_pdf', filename=filename) }}"
-          style="width:100%; height: calc(100vh - 56px); border:0;"
+          src="{{ url_for('raw_pdf', file_id=file_id) }}#zoom=page-width"
+          class="viewer-frame"
         ></iframe>
       </div>
     </main>

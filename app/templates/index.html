@@ -6,7 +6,7 @@
     <title>Docaro OCR-Renamer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
-  <body>
+  <body data-edit-all="{% if edit_all %}1{% else %}0{% endif %}">
     <main class="container">
       <header>
         <h1>Docaro OCR-Renamer</h1>
@@ -47,6 +47,20 @@
 
       <section class="panel">
         <h2>Ergebnisse</h2>
+        <form method="get" action="{{ url_for('index') }}" class="inline-form">
+          <label class="checkbox">
+            <input type="checkbox" name="incomplete" value="1" {% if incomplete_only %}checked{% endif %} />
+            <span>Nur unvollstaendig anzeigen</span>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" name="edit" value="1" {% if edit_all %}checked{% endif %} />
+            <span>Lieferanten bearbeiten anzeigen</span>
+          </label>
+          <button type="submit" class="ghost">Filter anwenden</button>
+        </form>
+        <form action="{{ url_for('undo_last') }}" method="post" class="inline-form">
+          <button type="submit" class="ghost">Letzte Aenderung rueckgaengig</button>
+        </form>
         {% if results is none %}
           <p class="muted">Noch keine Verarbeitung gestartet.</p>
         {% elif results|length == 0 %}
@@ -58,53 +72,89 @@
               <tr>
                 <th class="col-file">Datei</th>
                 <th>Lieferant</th>
-                <th>Quelle</th>
-                <th>Sicherheit</th>
                 <th>Datum</th>
                 <th>Status</th>
-                <th class="col-error">Fehler</th>
-                <th class="col-action">Aktion</th>
+                <th class="col-action">Aktionen</th>
               </tr>
             </thead>
             <tbody>
               {% for item in results %}
                 {% set conf = item.supplier_confidence|float if item.supplier_confidence else 0 %}
-                {% set has_conf = item.supplier_confidence is not none and item.supplier_confidence != '' %}
-                {% set show_action = item.supplier_source == 'heuristic' or (has_conf and conf < 0.85) or (not item.supplier) or item.supplier == 'Unbekannt' %}
+                {% set show_supplier_edit = item.supplier_missing or item.supplier_broken or edit_all %}
+                {% set show_date_edit = item.date_missing or edit_all %}
+                {% set view_url = item.view_url if item.view_url else (url_for('view_pdf', file_id=item.file_id) if item.file_id else '') %}
                 {% set is_gibberish = item.supplier_gibberish == '1' %}
+                {% if item.date_missing or item.supplier_missing %}
+                  {% set row_state = "unvollstaendig" %}
+                {% elif item.needs_review %}
+                  {% set row_state = "in_bearbeitung" %}
+                {% else %}
+                  {% set row_state = "fertig" %}
+                {% endif %}
                 <tr>
-                  <td class="col-file">{{ item.out_name or '-' }}</td>
-                  <td>{{ item.supplier or '-' }}</td>
-                  <td>{{ item.supplier_source or '-' }}</td>
-                  <td class="confidence {% if item.supplier_confidence %}{% if conf >= 0.85 %}conf-high{% elif conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}{% endif %}">
-                    {{ item.supplier_confidence or '-' }}
+                  <td class="col-file" data-field="out_name">{{ item.out_name or '-' }}</td>
+                  <td data-field="supplier">{{ item.supplier or '-' }}</td>
+                  <td data-field="date">{{ item.date or '-' }}</td>
+                  <td class="status-cell" data-field="review_state">
+                    <span class="status-pill status-{{ row_state }}">
+                      {% if row_state == "unvollstaendig" %}unvollstaendig{% elif row_state == "in_bearbeitung" %}in Bearbeitung{% else %}fertig{% endif %}
+                    </span>
                   </td>
-                  <td>{{ item.date or '-' }}</td>
-                  <td class="status {% if item.status == 'ok' %}status-ok{% elif item.status == 'error' %}status-error{% endif %}">{{ item.status }}</td>
-                  <td class="col-error">{{ item.error or '-' }}</td>
                   <td class="col-action">
-                    {% if show_action %}
-                      <form action="{{ url_for('confirm_supplier') }}" method="post" class="inline-form action-form">
-                        <label class="field-label">Lieferant eingeben</label>
-                        <input class="action-input" type="text" name="supplier_name" placeholder="Lieferant eingeben" value="{{ item.supplier if item.supplier and item.supplier != 'Unbekannt' and not is_gibberish else '' }}" />
-                        <input type="hidden" name="filename" value="{{ item.out_name or '' }}" />
-                        <input type="hidden" name="supplier_guess_line" value="{{ item.supplier_guess_line or '' }}" />
-                        {% if item.supplier_guess_line and not is_gibberish %}
-                          <label class="checkbox">
-                            <input type="checkbox" name="use_alias" value="1" checked />
-                            <span>Alias aus OCR-Zeile uebernehmen</span>
-                          </label>
-                        {% endif %}
-                        <div class="action-actions">
-                          <button type="submit">Bestaetigen &amp; Merken</button>
-                          {% if item.out_name %}
-                            <a class="action-link" href="{{ url_for('view_pdf', filename=item.out_name) }}" target="_blank" rel="noopener">PDF oeffnen</a>
+                    <div class="action-stack">
+                      <details class="action-details" data-doc-id="{{ item.file_id or '' }}" data-edit-kind="supplier" {% if show_supplier_edit %}open{% endif %}>
+                        <summary class="action-summary">Lieferant bearbeiten</summary>
+                        <form action="{{ url_for('confirm_supplier') }}" method="post" class="inline-form action-form" data-ajax="1">
+                          <label class="field-label">Lieferant eingeben</label>
+                          <input class="action-input" type="text" name="supplier_input" placeholder="Lieferant eingeben" value="{{ item.supplier if item.supplier and item.supplier != 'Unbekannt' and not is_gibberish else '' }}" />
+                          <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />
+                          <input type="hidden" name="supplier_guess_line" value="{{ item.supplier_guess_line or '' }}" />
+                          {% if item.supplier_guess_line and not is_gibberish %}
+                            <label class="checkbox">
+                              <input type="checkbox" name="use_alias" value="1" checked />
+                              <span>Alias aus OCR-Zeile uebernehmen</span>
+                            </label>
                           {% endif %}
-                        </div>
-                      </form>
-                    {% else %}
-                      -
-                    {% endif %}
+                          <div class="action-actions">
+                            <button type="submit" class="action-button">Lieferant speichern</button>
+                          </div>
+                        </form>
+                      </details>
+                      <details class="action-details action-date-details {% if not item.date_missing %}is-compact{% endif %}" data-doc-id="{{ item.file_id or '' }}" data-edit-kind="date" {% if show_date_edit %}open{% endif %}>
+                        <summary class="action-summary">Datum bearbeiten</summary>
+                        <form action="{{ url_for('confirm_date') }}" method="post" class="inline-form action-form" data-ajax="1">
+                          <label class="field-label">Datum eingeben</label>
+                          <input class="action-input action-date-input" type="text" name="date_input" placeholder="TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD" value="{{ item.date or '' }}" />
+                          <select name="date_fmt" class="action-select">
+                            <option value="%Y-%m-%d" selected>ISO (YYYY-MM-DD)</option>
+                            <option value="%d.%m.%Y">Deutsch (DD.MM.YYYY)</option>
+                            <option value="%d-%m-%Y">Deutsch mit Bindestrich (DD-MM-YYYY)</option>
+                          </select>
+                          <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />
+                          <div class="action-actions">
+                            <button type="submit" class="action-button">Datum speichern</button>
+                          </div>
+                        </form>
+                      </details>
+                      <div class="action-links">
+                        {% if item.file_id %}
+                          <a class="action-link" href="{{ view_url }}" target="_blank" rel="noopener">PDF oeffnen</a>
+                        {% endif %}
+                        <button type="button" class="action-link action-detail-toggle" data-detail-toggle="{{ item.file_id or '' }}">Details anzeigen</button>
+                        <span class="action-message" data-role="message"></span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr class="detail-row" data-detail-row="{{ item.file_id or '' }}" hidden>
+                  <td colspan="5">
+                    <div class="detail-grid">
+                      <div><span class="detail-label">Quelle:</span> <span data-field="supplier_source">{{ item.supplier_source or '-' }}</span></div>
+                      <div><span class="detail-label">Sicherheit:</span> <span class="{% if item.supplier_confidence %}{% if conf >= 0.85 %}conf-high{% elif conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}{% endif %}" data-field="supplier_confidence">{{ item.supplier_confidence or '-' }}</span></div>
+                      <div><span class="detail-label">Fehler:</span> <span data-field="error">{{ item.error or '-' }}</span></div>
+                      <div><span class="detail-label">OCR:</span> <span data-field="tesseract_status">{{ item.tesseract_status or '-' }}</span></div>
+                      <div><span class="detail-label">Poppler:</span> <span data-field="poppler_status">{{ item.poppler_status or '-' }}</span></div>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}
@@ -133,5 +183,169 @@
         {% endif %}
       </section>
     </main>
+    <script>
+      (() => {
+        const editAll = document.querySelector("body")?.dataset?.editAll === "1";
+        const detailsItems = document.querySelectorAll("details[data-doc-id]");
+        detailsItems.forEach((details) => {
+          const docId = details.dataset.docId || "";
+          const kind = details.dataset.editKind || "edit";
+          if (!docId) {
+            return;
+          }
+          const storageKey = `docaro:edit:${docId}:${kind}`;
+          const stored = localStorage.getItem(storageKey);
+          if (!editAll && stored) {
+            details.open = stored === "open";
+          }
+          details.addEventListener("toggle", () => {
+            localStorage.setItem(storageKey, details.open ? "open" : "closed");
+          });
+        });
+
+        document.querySelectorAll("[data-detail-toggle]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const id = button.dataset.detailToggle;
+            if (!id) {
+              return;
+            }
+            const detailRow = document.querySelector(`[data-detail-row="${id}"]`);
+            if (!detailRow) {
+              return;
+            }
+            const isHidden = detailRow.hasAttribute("hidden");
+            if (isHidden) {
+              detailRow.removeAttribute("hidden");
+              button.textContent = "Details verbergen";
+            } else {
+              detailRow.setAttribute("hidden", "hidden");
+              button.textContent = "Details anzeigen";
+            }
+          });
+        });
+
+        const statusLabel = (payload) => {
+          if (payload.date_missing || payload.supplier_missing) {
+            return { text: "unvollstaendig", cls: "status-unvollstaendig" };
+          }
+          if (payload.needs_review) {
+            return { text: "in Bearbeitung", cls: "status-in_bearbeitung" };
+          }
+          return { text: "fertig", cls: "status-fertig" };
+        };
+
+        const updateRow = (row, payload) => {
+          if (!row || !payload) {
+            return;
+          }
+          const fields = {
+            out_name: payload.out_name,
+            supplier: payload.supplier,
+            date: payload.date,
+            supplier_source: payload.supplier_source,
+            supplier_confidence: payload.supplier_confidence,
+            error: payload.error || "-",
+            tesseract_status: payload.tesseract_status || "-",
+            poppler_status: payload.poppler_status || "-",
+          };
+          Object.entries(fields).forEach(([key, value]) => {
+            if (value === undefined) {
+              return;
+            }
+            const cell = row.querySelector(`[data-field="${key}"]`);
+            if (cell) {
+              cell.textContent = value || "-";
+            }
+          });
+          const detailRow = row.nextElementSibling;
+          if (detailRow && detailRow.matches(".detail-row")) {
+            const errorCell = detailRow.querySelector('[data-field="error"]');
+            if (errorCell) {
+              errorCell.textContent = payload.error || "-";
+            }
+            const sourceCell = detailRow.querySelector('[data-field="supplier_source"]');
+            if (sourceCell) {
+              sourceCell.textContent = payload.supplier_source || "-";
+            }
+            const tesseractCell = detailRow.querySelector('[data-field="tesseract_status"]');
+            if (tesseractCell) {
+              tesseractCell.textContent = payload.tesseract_status || "-";
+            }
+            const popplerCell = detailRow.querySelector('[data-field="poppler_status"]');
+            if (popplerCell) {
+              popplerCell.textContent = payload.poppler_status || "-";
+            }
+            const confCell = detailRow.querySelector('[data-field="supplier_confidence"]');
+            if (confCell) {
+              const confValue = parseFloat(payload.supplier_confidence || "0");
+              let cls = "";
+              if (!Number.isNaN(confValue)) {
+                if (confValue >= 0.85) {
+                  cls = "conf-high";
+                } else if (confValue >= 0.6) {
+                  cls = "conf-mid";
+                } else if (confValue > 0) {
+                  cls = "conf-low";
+                }
+              }
+              confCell.className = cls;
+            }
+          }
+          const statusCell = row.querySelector(".status-pill");
+          if (statusCell) {
+            const next = statusLabel(payload);
+            statusCell.textContent = next.text;
+            statusCell.className = `status-pill ${next.cls}`;
+          }
+        };
+
+        document.querySelectorAll("form[data-ajax='1']").forEach((form) => {
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const row = form.closest("tr");
+            if (!row) {
+              return;
+            }
+            const message = row.querySelector('[data-role="message"]');
+            row.classList.add("is-saving");
+            const statusCell = row.querySelector(".status-pill");
+            if (statusCell) {
+              statusCell.textContent = "in Bearbeitung";
+              statusCell.className = "status-pill status-in_bearbeitung";
+            }
+            if (message) {
+              message.textContent = "Speichern...";
+            }
+            const formData = new FormData(form);
+            try {
+              const response = await fetch(form.action, {
+                method: "POST",
+                headers: {
+                  "X-Requested-With": "fetch",
+                  Accept: "application/json",
+                },
+                body: formData,
+              });
+              if (!response.ok) {
+                throw new Error("save_failed");
+              }
+              const payload = await response.json();
+              if (payload && payload.ok) {
+                updateRow(row, payload);
+              }
+              if (message) {
+                message.textContent = payload.message || "Gespeichert";
+              }
+            } catch (err) {
+              if (message) {
+                message.textContent = "Speichern fehlgeschlagen";
+              }
+            } finally {
+              row.classList.remove("is-saving");
+            }
+          });
+        });
+      })();
+    </script>
   </body>
 </html>
