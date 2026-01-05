@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 import sys
@@ -9,6 +9,11 @@ import zipfile
 import json
 import re
 from uuid import uuid4
+from contextlib import contextmanager
+import time
+import secrets
+import logging
+import traceback
 
 import os
 
@@ -26,6 +31,7 @@ from flask import (
     url_for,
 )
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 
 APP_DIR = Path(__file__).resolve().parent
 BASE_DIR = APP_DIR.parent
@@ -47,6 +53,7 @@ OUT_DIR = DATA_DIR / "fertig"
 TMP_DIR = DATA_DIR / "tmp"
 SUPPLIER_CORRECTIONS_PATH = DATA_DIR / "supplier_corrections.json"
 SESSION_FILES_PATH = DATA_DIR / "session_files.json"
+SESSION_FILES_LOCK = DATA_DIR / "session_files.lock"
 
 ALLOWED_EXTENSIONS = {".pdf"}
 ALLOWED_DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%Y%m%d")
@@ -61,9 +68,84 @@ MANUAL_DATE_FORMATS = (
     "%d/%m/%y",
 )
 HISTORY_PATH = DATA_DIR / "history.jsonl"
+LOG_RETENTION_DAYS = int(os.getenv("DOCARO_LOG_RETENTION_DAYS", "90"))
+
+try:
+    import msvcrt  # type: ignore
+except ImportError:  # pragma: no cover - non-Windows fallback
+    msvcrt = None
+
+try:
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
+DEBUG_MODE = os.getenv("DOCARO_DEBUG") == "1"
 
 app = Flask(__name__)
-app.secret_key = os.getenv("DOCARO_SECRET_KEY", "docaro-dev-key")
+_secret = os.getenv("DOCARO_SECRET_KEY")
+if not _secret:
+    if os.getenv("DOCARO_ALLOW_INSECURE_SECRET") == "1":
+        _secret = secrets.token_hex(32)
+    else:
+        raise RuntimeError(
+            "DOCARO_SECRET_KEY fehlt. Bitte setzen. Beispiel (PowerShell): "
+            '$env:DOCARO_SECRET_KEY="change-me-please" '
+            "(optional nur fuer Tests: DOCARO_ALLOW_INSECURE_SECRET=1)."
+        )
+app.secret_key = _secret
+LOG_DIR = DATA_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_PATH = LOG_DIR / "server.log"
+_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+_handler.setLevel(logging.INFO)
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
+app.logger.addHandler(_handler)
+app.logger.setLevel(logging.INFO)
+app.config["PROPAGATE_EXCEPTIONS"] = True
+app.config["DEBUG"] = DEBUG_MODE
+
+_werkzeug_logger = logging.getLogger("werkzeug")
+_werkzeug_logger.addHandler(_handler)
+_werkzeug_logger.setLevel(logging.INFO)
+
+
+def _log_exception(context: str, exc: Exception) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(f"{datetime.now().isoformat(timespec='seconds')} ERROR {context}\n")
+        handle.write(f"{repr(exc)}\n")
+        handle.write(traceback.format_exc())
+        handle.write("\n")
+
+
+@app.before_request
+def _trace_upload_requests():
+    if request.path == "/upload":
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(f"{datetime.now().isoformat(timespec='seconds')} INFO request {request.method} {request.path}\n")
+
+
+if not DEBUG_MODE:
+    @app.errorhandler(Exception)
+    def _handle_exception(exc: Exception):
+        if isinstance(exc, HTTPException):
+            return exc
+        app.logger.exception("Unhandled exception", exc_info=exc)
+        return "Internal Server Error", 500
+
+
+@app.after_request
+def _log_server_errors(response):
+    if response.status_code >= 500:
+        app.logger.error(
+            "HTTP %s %s -> %s",
+            request.method,
+            request.path,
+            response.status_code,
+        )
+    return response
 
 
 def _allowed_file(filename: str) -> bool:
@@ -94,34 +176,38 @@ def index():
 
 @app.post("/upload")
 def upload():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    uploaded = request.files.getlist("files")
-    if not uploaded:
-        return render_template("index.html", results=[], files=_list_finished())
+        uploaded = request.files.getlist("files")
+        if not uploaded:
+            return render_template("index.html", results=[], files=_list_finished())
 
-    date_fmt = request.form.get("date_fmt", "").strip()
-    if date_fmt not in ALLOWED_DATE_FORMATS:
-        date_fmt = "%Y-%m-%d"
+        date_fmt = request.form.get("date_fmt", "").strip()
+        if date_fmt not in ALLOWED_DATE_FORMATS:
+            date_fmt = "%Y-%m-%d"
 
-    upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    for storage in uploaded:
-        if not storage or not storage.filename:
-            continue
-        safe_name = secure_filename(storage.filename)
-        if not safe_name or not _allowed_file(safe_name):
-            continue
-        target_path = get_unique_path(upload_dir, safe_name)
-        storage.save(target_path)
+        upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for storage in uploaded:
+            if not storage or not storage.filename:
+                continue
+            safe_name = secure_filename(storage.filename)
+            if not safe_name or not _allowed_file(safe_name):
+                continue
+            target_path = get_unique_path(upload_dir, safe_name)
+            storage.save(target_path)
 
-    results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt)
-    _clear_pdfs(upload_dir)
-    results = _attach_file_ids(results)
-    results = _apply_result_flags(results)
-    _save_last_results(results)
-    return render_template("index.html", results=results, files=_list_finished(), reset_done=False)
+        results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt)
+        _clear_pdfs(upload_dir)
+        results = _attach_file_ids(results)
+        results = _apply_result_flags(results)
+        _save_last_results(results)
+        return render_template("index.html", results=results, files=_list_finished(), reset_done=False)
+    except Exception as exc:
+        _log_exception("upload:handler", exc)
+        raise
 
 
 @app.get("/upload")
@@ -167,7 +253,7 @@ def _save_last_results(results) -> None:
 def _load_last_results():
     results = session.get("last_results")
     if results is not None:
-        return results
+        return _apply_supplier_corrections(results)
     results_path = _session_results_path()
     if not results_path.exists():
         return None
@@ -175,6 +261,7 @@ def _load_last_results():
         results = json.loads(results_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+    results = _apply_supplier_corrections(results)
     session["last_results"] = results
     return results
 
@@ -182,15 +269,20 @@ def _load_last_results():
 def _load_session_files() -> dict:
     if not SESSION_FILES_PATH.exists():
         return {}
-    try:
-        return json.loads(SESSION_FILES_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    with _locked_file(SESSION_FILES_LOCK, mode="a+"):
+        try:
+            return json.loads(SESSION_FILES_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
 
 
 def _save_session_files(data: dict) -> None:
     SESSION_FILES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_FILES_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    payload = json.dumps(data, indent=2)
+    with _locked_file(SESSION_FILES_LOCK, mode="a+"):
+        tmp_path = SESSION_FILES_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        tmp_path.replace(SESSION_FILES_PATH)
 
 
 def _get_session_file_map() -> dict:
@@ -219,6 +311,7 @@ def _append_history(entry: dict) -> None:
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with HISTORY_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    _trim_history()
 
 
 def _load_supplier_corrections() -> dict:
@@ -258,38 +351,38 @@ def _latest_history_entry() -> Optional[dict]:
     return None
 
 
-def _is_date_missing(date_value: Optional[str], parsing_failed: bool = False) -> bool:
+def _is_date_missing(date_valAe: Optional[str], parsing_failed: bool = False) -> bool:
     if parsing_failed:
         return True
-    if date_value is None:
+    if date_valAe is None:
         return True
-    value = str(date_value).strip()
-    if not value or value == "-":
+    valAe = str(date_valAe).strip()
+    if not valAe or valAe == "-":
         return True
-    if "unbekannt" in value.lower():
+    if "unbekannt" in valAe.lower():
         return True
     return False
 
 
-def _is_supplier_missing(supplier_value: Optional[str]) -> bool:
-    if supplier_value is None:
+def _is_supplier_missing(supplier_valAe: Optional[str]) -> bool:
+    if supplier_valAe is None:
         return True
-    value = str(supplier_value).strip()
-    return not value or value == "Unbekannt"
+    valAe = str(supplier_valAe).strip()
+    return not valAe or valAe == "Unbekannt"
 
 
-def _is_supplier_broken(supplier_value: Optional[str]) -> bool:
-    if supplier_value is None:
+def _is_supplier_broken(supplier_valAe: Optional[str]) -> bool:
+    if supplier_valAe is None:
         return False
-    value = str(supplier_value).strip()
-    if not value:
+    valAe = str(supplier_valAe).strip()
+    if not valAe:
         return False
-    if len(value) > 60:
+    if len(valAe) > 60:
         return True
-    non_word = sum(1 for ch in value if not (ch.isalnum() or ch in (" ", "-", "_", "&", ".")))
+    non_word = sum(1 for ch in valAe if not (ch.isalnum() or ch in (" ", "-", "_", "&", ".")))
     if non_word >= 6:
         return True
-    if value.count(" ") >= 8:
+    if valAe.count(" ") >= 8:
         return True
     return False
 
@@ -299,11 +392,11 @@ def _apply_result_flags(results):
         return results
     for item in results:
         parsing_failed = bool(item.get("parsing_failed"))
-        date_value = item.get("date")
-        supplier_value = item.get("supplier")
-        item["date_missing"] = _is_date_missing(date_value, parsing_failed)
-        item["supplier_missing"] = _is_supplier_missing(supplier_value)
-        item["supplier_broken"] = _is_supplier_broken(supplier_value)
+        date_valAe = item.get("date")
+        supplier_valAe = item.get("supplier")
+        item["date_missing"] = _is_date_missing(date_valAe, parsing_failed)
+        item["supplier_missing"] = _is_supplier_missing(supplier_valAe)
+        item["supplier_broken"] = _is_supplier_broken(supplier_valAe)
         item["needs_review"] = _is_review_needed(item)
         if item.get("file_id"):
             item["view_url"] = url_for("view_pdf", file_id=item["file_id"])
@@ -409,7 +502,7 @@ def confirm_supplier():
 
     supplier_name = _normalize_supplier_input(supplier_input)
     if len(supplier_name) < 2:
-        message = "Lieferant ungueltig."
+        message = "Lieferant ungültig."
         if _is_ajax_request():
             return jsonify({"ok": False, "message": message}), 400
         flash(message)
@@ -546,8 +639,8 @@ def _safe_pdf_name(filename: str) -> str:
     return safe_name
 
 
-def _normalize_supplier_input(value: str) -> str:
-    cleaned = (value or "").strip()
+def _normalize_supplier_input(valAe: str) -> str:
+    cleaned = (valAe or "").strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
     cleaned = re.sub(r"[^a-zA-Z0-9 ._&-]+", "", cleaned)
     cleaned = cleaned.strip("._- ")
@@ -587,20 +680,21 @@ def resolve_pdf_path(filename: str) -> Optional[Path]:
         candidates.append(safe_name)
     if not candidates:
         return None
-    # Search known roots first, then a limited recursive scan within those roots.
+    # Search known roots first; deep scan is optional for performance reasons.
     roots = _allowed_roots()
     for root in roots:
         for name in candidates:
             candidate = root / name
             if candidate.exists():
                 return candidate
-    for root in roots:
-        if not root.exists():
-            continue
-        for name in candidates:
-            for candidate in root.rglob(name):
-                if candidate.is_file():
-                    return candidate
+    if os.getenv("DOCARO_DEEP_SCAN") == "1":
+        for root in roots:
+            if not root.exists():
+                continue
+            for name in candidates:
+                for candidate in root.rglob(name):
+                    if candidate.is_file():
+                        return candidate
     return None
 
 
@@ -643,9 +737,9 @@ def _resolve_file_path(file_id: str) -> Optional[Path]:
             tried.add(filename)
     result = _result_for_file_id(file_id) or {}
     for key in ("out_name", "filename", "original", "original_name"):
-        value = result.get(key) or ""
-        if value:
-            tried.add(value)
+        valAe = result.get(key) or ""
+        if valAe:
+            tried.add(valAe)
     for name in list(tried):
         safe_name = secure_filename(name)
         if safe_name:
@@ -662,6 +756,89 @@ def _get_session_file_entry(file_id: str) -> Optional[dict]:
     data = _load_session_files()
     sid = _get_session_id()
     return data.get(sid, {}).get(file_id)
+
+
+@contextmanager
+def _locked_file(path: Path, mode: str = "a+", retries: int = 20, delay: float = 0.05):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, mode)
+    locked = False
+    try:
+        for _ in range(retries):
+            try:
+                if msvcrt:
+                    lock_mode = msvcrt.LK_LOCK
+                    if "r" in mode and "+" not in mode and "w" not in mode and "a" not in mode:
+                        lock_mode = msvcrt.LK_RLCK
+                    msvcrt.locking(handle.fileno(), lock_mode, 1)
+                elif fcntl:
+                    lock_mode = fcntl.LOCK_EX
+                    if "r" in mode and "+" not in mode and "w" not in mode and "a" not in mode:
+                        lock_mode = fcntl.LOCK_SH
+                    fcntl.flock(handle.fileno(), lock_mode)
+                locked = True
+                break
+            except OSError:
+                time.sleep(delay)
+        if not locked:
+            raise RuntimeError(f"Lock konnte nicht gesetzt werden: {path}")
+        yield handle
+    finally:
+        if locked:
+            try:
+                if msvcrt:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                elif fcntl:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
+def _apply_supplier_corrections(results):
+    if results is None:
+        return results
+    corrections = _load_supplier_corrections()
+    if not corrections:
+        return results
+    changed = False
+    for item in results:
+        file_id = item.get("file_id")
+        if not file_id:
+            continue
+        corrected = corrections.get(file_id)
+        if corrected and item.get("supplier") != corrected:
+            item["supplier"] = corrected
+            item["supplier_source"] = "manual"
+            item["supplier_confidence"] = "1.00"
+            changed = True
+    if changed:
+        _save_last_results(results)
+    return results
+
+
+def _trim_history() -> None:
+    if not HISTORY_PATH.exists():
+        return
+    cutoff = datetime.now() - timedelta(days=max(LOG_RETENTION_DAYS, 1))
+    kept = []
+    for line in HISTORY_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = entry.get("timestamp") or ""
+        try:
+            ts_dt = datetime.fromisoformat(ts)
+        except ValueError:
+            kept.append(entry)
+            continue
+        if ts_dt >= cutoff:
+            kept.append(entry)
+    payload = "\n".join(json.dumps(entry, ensure_ascii=True) for entry in kept)
+    HISTORY_PATH.write_text((payload + "\n") if payload else "", encoding="utf-8")
 
 
 def _rename_pdf_with_name(pdf_path: Path, filename: str) -> Tuple[Optional[Path], str]:
@@ -738,7 +915,7 @@ def view_pdf(file_id: str):
 def _build_view_context(
     file_id: str,
     date_error: str = "",
-    date_value: str = "",
+    date_valAe: str = "",
     date_fmt: str = "",
     pdf_missing: bool = False,
 ) -> dict:
@@ -748,7 +925,7 @@ def _build_view_context(
     supplier_source = result.get("supplier_source") or ""
     supplier_confidence = result.get("supplier_confidence") or ""
     filename = result.get("out_name") or result.get("filename") or file_id
-    date_value = date_value or result.get("date") or ""
+    date_valAe = date_valAe or result.get("date") or ""
     date_fmt = date_fmt if date_fmt in MANUAL_DATE_FORMATS else INTERNAL_DATE_FORMAT
     review_items = _review_list()
     review_total = len(review_items)
@@ -769,7 +946,7 @@ def _build_view_context(
         "supplier_confidence": supplier_confidence,
         "review_index": review_index,
         "review_total": review_total,
-        "date_value": date_value,
+        "date_valAe": date_valAe,
         "date_error": date_error,
         "date_fmt": date_fmt,
         "pdf_missing": pdf_missing,
@@ -779,7 +956,7 @@ def _build_view_context(
 def _render_view_pdf(
     file_id: str,
     date_error: str = "",
-    date_value: str = "",
+    date_valAe: str = "",
     date_fmt: str = "",
     pdf_missing: bool = False,
 ):
@@ -788,7 +965,7 @@ def _render_view_pdf(
         **_build_view_context(
             file_id,
             date_error=date_error,
-            date_value=date_value,
+            date_valAe=date_valAe,
             date_fmt=date_fmt,
             pdf_missing=pdf_missing,
         ),
@@ -817,8 +994,8 @@ def confirm_date_from_view():
     if not date_obj:
         return _render_view_pdf(
             file_id,
-            date_error="Ungueltiges Datum. Bitte TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD eingeben.",
-            date_value=date_input,
+            date_error="Ungültiges Datum. Bitte TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD eingeben.",
+            date_valAe=date_input,
             date_fmt=date_fmt,
         )
 
@@ -885,7 +1062,7 @@ def confirm_date():
     date_fmt = request.form.get("date_fmt", "").strip()
     date_obj = _normalize_date_input(date_input, date_fmt)
     if not date_obj:
-        message = "Ungueltiges Datum. Bitte TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD eingeben."
+        message = "Ungültiges Datum. Bitte TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD eingeben."
         if _is_ajax_request():
             return jsonify({"ok": False, "message": message}), 400
         flash(message)
@@ -973,7 +1150,7 @@ def raw_pdf(file_id: str):
 def undo_last():
     entry = _latest_history_entry()
     if not entry:
-        flash("Keine Aenderung zum Rueckgaengigmachen.")
+        flash("Keine Änderung zum Rückgängigmachen.")
         return redirect(url_for("index"))
 
     file_id = entry.get("file_id") or ""
@@ -992,7 +1169,7 @@ def undo_last():
             new_path.replace(target)
             filename_before = target.name
         except OSError:
-            flash("Rueckgaengig fehlgeschlagen.")
+            flash("Rückgängig fehlgeschlagen.")
             return redirect(url_for("index"))
 
     results = _load_last_results() or []
@@ -1030,7 +1207,7 @@ def undo_last():
             "action_type": "undo",
         }
     )
-    flash("Letzte Aenderung rueckgaengig gemacht.")
+    flash("Letzte Änderung rückgängig gemacht.")
     return redirect(url_for("index"))
 
 
@@ -1082,7 +1259,7 @@ def suppliers_rename():
     old_name = request.form.get("old_name", "").strip()
     new_name = request.form.get("new_name", "").strip()
     if len(old_name) < 2 or len(new_name) < 2:
-        flash("Lieferantenname ungueltig.")
+        flash("Lieferantenname ungültig.")
         return redirect(url_for("suppliers"))
 
     data = load_suppliers_db()
@@ -1110,7 +1287,7 @@ def suppliers_alias_add():
     supplier_name = request.form.get("supplier_name", "").strip()
     alias = request.form.get("alias", "").strip()
     if len(supplier_name) < 2 or len(alias) < 2:
-        flash("Alias ungueltig.")
+        flash("Alias ungAeltig.")
         return redirect(url_for("suppliers"))
 
     data = load_suppliers_db()
@@ -1132,7 +1309,7 @@ def suppliers_alias_remove():
     supplier_name = request.form.get("supplier_name", "").strip()
     alias = request.form.get("alias", "").strip()
     if len(supplier_name) < 2 or not alias:
-        flash("Alias ungueltig.")
+        flash("Alias ungAeltig.")
         return redirect(url_for("suppliers"))
 
     data = load_suppliers_db()
@@ -1154,7 +1331,7 @@ def suppliers_alias_remove():
 def suppliers_delete():
     supplier_name = request.form.get("supplier_name", "").strip()
     if len(supplier_name) < 2:
-        flash("Lieferant ungueltig.")
+        flash("Lieferant ungültig.")
         return redirect(url_for("suppliers"))
 
     data = load_suppliers_db()
@@ -1167,7 +1344,7 @@ def suppliers_delete():
     suppliers_list.remove(target)
     data["suppliers"] = suppliers_list
     save_suppliers_db(data)
-    flash("Lieferant geloescht.")
+    flash("Lieferant gelöscht.")
     return redirect(url_for("suppliers"))
 
 
@@ -1215,4 +1392,4 @@ def download_all():
 
 if __name__ == "__main__":
     # Start from repo root with: python app/app.py
-    app.run(debug=False)
+    app.run(debug=DEBUG_MODE, use_reloader=False)
