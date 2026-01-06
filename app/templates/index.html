@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="de">
   <head>
     <meta charset="utf-8" />
@@ -15,7 +15,7 @@
           <a href="{{ url_for('suppliers') }}">Lieferanten verwalten</a>
         </p>
         {% if reset_done %}
-          <p class="notice">Downloads wurden zurueckgesetzt.</p>
+          <p class="notice">Downloads wurden zurückgesetzt.</p>
         {% endif %}
         {% with messages = get_flashed_messages() %}
           {% if messages %}
@@ -29,7 +29,7 @@
       <section class="panel">
         <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
           <label class="file-input">
-            <span>PDF-Dateien auswaehlen</span>
+            <span>PDF-Dateien auswählen</span>
             <input type="file" name="files" accept="application/pdf" multiple />
           </label>
           <label>
@@ -50,7 +50,7 @@
         <form method="get" action="{{ url_for('index') }}" class="inline-form">
           <label class="checkbox">
             <input type="checkbox" name="incomplete" value="1" {% if incomplete_only %}checked{% endif %} />
-            <span>Nur unvollstaendig anzeigen</span>
+            <span>Nur unvollständig anzeigen</span>
           </label>
           <label class="checkbox">
             <input type="checkbox" name="edit" value="1" {% if edit_all %}checked{% endif %} />
@@ -59,12 +59,12 @@
           <button type="submit" class="ghost">Filter anwenden</button>
         </form>
         <form action="{{ url_for('undo_last') }}" method="post" class="inline-form">
-          <button type="submit" class="ghost">Letzte Aenderung rueckgaengig</button>
+          <button type="submit" class="ghost">Letzte Änderung rückgängig</button>
         </form>
         {% if results is none %}
           <p class="muted">Noch keine Verarbeitung gestartet.</p>
         {% elif results|length == 0 %}
-          <p class="muted">Keine gueltigen PDFs gefunden.</p>
+          <p class="muted">Keine gültigen PDFs gefunden.</p>
         {% else %}
           <div class="table-wrapper">
             <table>
@@ -97,7 +97,7 @@
                   <td data-field="date">{{ item.date or '-' }}</td>
                   <td class="status-cell" data-field="review_state">
                     <span class="status-pill status-{{ row_state }}">
-                      {% if row_state == "unvollstaendig" %}unvollstaendig{% elif row_state == "in_bearbeitung" %}in Bearbeitung{% else %}fertig{% endif %}
+                      {% if row_state == "unvollstaendig" %}unvollständig{% elif row_state == "in_bearbeitung" %}in Bearbeitung{% else %}fertig{% endif %}
                     </span>
                   </td>
                   <td class="col-action">
@@ -112,7 +112,7 @@
                           {% if item.supplier_guess_line and not is_gibberish %}
                             <label class="checkbox">
                               <input type="checkbox" name="use_alias" value="1" checked />
-                              <span>Alias aus OCR-Zeile uebernehmen</span>
+                              <span>Alias aus OCR-Zeile übernehmen</span>
                             </label>
                           {% endif %}
                           <div class="action-actions">
@@ -138,7 +138,7 @@
                       </details>
                       <div class="action-links">
                         {% if item.file_id %}
-                          <a class="action-link" href="{{ view_url }}" target="_blank" rel="noopener">PDF oeffnen</a>
+                          <a class="action-link" href="{{ view_url }}" target="_blank" rel="noopener">PDF öffnen</a>
                         {% endif %}
                         <button type="button" class="action-link action-detail-toggle" data-detail-toggle="{{ item.file_id or '' }}">Details anzeigen</button>
                         <span class="action-message" data-role="message"></span>
@@ -166,8 +166,8 @@
 
       <section class="panel">
         <h2>Download</h2>
-        <form action="{{ url_for('reset_downloads') }}" method="post" onsubmit="return confirm('Downloads wirklich zuruecksetzen?');">
-          <button type="submit" class="danger">Downloads zuruecksetzen</button>
+        <form action="{{ url_for('reset_downloads') }}" method="post" onsubmit="return confirm('Downloads wirklich zurücksetzen?');">
+          <button type="submit" class="danger">Downloads zurücksetzen</button>
         </form>
         {% if files|length == 0 %}
           <p class="muted">Noch keine fertigen Dateien.</p>
@@ -226,7 +226,7 @@
 
         const statusLabel = (payload) => {
           if (payload.date_missing || payload.supplier_missing) {
-            return { text: "unvollstaendig", cls: "status-unvollstaendig" };
+            return { text: "unvollständig", cls: "status-unvollstaendig" };
           }
           if (payload.needs_review) {
             return { text: "in Bearbeitung", cls: "status-in_bearbeitung" };

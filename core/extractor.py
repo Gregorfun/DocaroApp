@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import shlex
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -27,6 +28,7 @@ OCR_PAGES = max(1, min(int(os.getenv("DOCARO_OCR_PAGES", "2")), 5))
 LOG_RETENTION_DAYS = int(os.getenv("DOCARO_LOG_RETENTION_DAYS", "90"))
 DEBUG_EXTRACT = os.getenv("DOCARO_DEBUG_EXTRACT") == "1"
 DEBUG_LOG_PATH = BASE_DIR / "data" / "logs" / "extract_debug.log"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _has_pdfinfo(bin_dir: Path) -> bool:
@@ -183,6 +185,22 @@ CANONICAL_SUPPLIERS = {
     "verglst": "Vergoelst",
 }
 
+LABEL_PATTERNS = [
+    ("lieferdatum", re.compile(r"\b(lieferscheindatum|lieferdatum|liefertermin|tag der lieferung)\b", re.IGNORECASE)),
+    ("belegdatum", re.compile(r"\b(beleg[-\s]?datum)\b", re.IGNORECASE)),
+    ("rechnungsdatum", re.compile(r"\b(rechn\.?-?\s*dat\.?|rechnungsdatum)\b", re.IGNORECASE)),
+    ("druckdatum", re.compile(r"\b(druckdatum(?:\s*[/\-]?\s*zeit)?|druckdatum/-zeit)\b", re.IGNORECASE)),
+]
+
+LABEL_PRIORITY = {
+    "lieferdatum": 1,
+    "belegdatum": 2,
+    "rechnungsdatum": 3,
+    "druckdatum": 4,
+    "vom": 5,
+    "generic": 6,
+}
+
 MONTH_MAP = {
     "jan": "01",
     "januar": "01",
@@ -321,6 +339,102 @@ def _rotation_candidates_from_crops(image) -> List[Tuple[int, int]]:
     return candidates
 
 
+def _render_pdf_images(
+    pdf_path: Path,
+    poppler_bin: Optional[Path],
+    pages: int = 1,
+) -> Tuple[List[object], str]:
+    pages = max(1, min(pages, 5))
+    try:
+        try:
+            images = convert_from_path(
+                str(pdf_path),
+                dpi=300,
+                first_page=1,
+                last_page=pages,
+                poppler_path=str(poppler_bin) if poppler_bin else None,
+                timeout=PDF_CONVERT_TIMEOUT,
+            )
+        except TypeError:
+            images = convert_from_path(
+                str(pdf_path),
+                dpi=300,
+                first_page=1,
+                last_page=pages,
+                poppler_path=str(poppler_bin) if poppler_bin else None,
+            )
+    except PDFInfoNotInstalledError:
+        return [], "Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN"
+    except (PDFPageCountError, PDFSyntaxError) as exc:
+        return [], f"pdf_read_failed: {exc}"
+    except Exception as exc:
+        return [], f"pdf_convert_failed: {exc}"
+    if not images:
+        return [], "Keine Seiten im PDF gefunden."
+    return images, ""
+
+
+def _extract_textlayer(pdf_path: Path, pages: int = 1) -> Tuple[List[str], str]:
+    pages = max(1, min(pages, 5))
+    texts: List[str] = []
+    try:
+        import pdfplumber  # type: ignore
+
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            for page in pdf.pages[:pages]:
+                texts.append(page.extract_text() or "")
+        return texts, ""
+    except Exception:
+        pass
+    try:
+        from PyPDF2 import PdfReader  # type: ignore
+
+        reader = PdfReader(str(pdf_path))
+        for page in reader.pages[:pages]:
+            texts.append(page.extract_text() or "")
+        return texts, ""
+    except Exception as exc:
+        return [], f"textlayer_failed: {exc}"
+
+
+def _score_rotation_text(text: str) -> int:
+    words = len(text.split())
+    label_hits = sum(1 for _, pattern in LABEL_PATTERNS if pattern.search(text))
+    date_hits = len(NUMERIC_DATE_REGEX.findall(text)) + len(ISO_DATE_REGEX.findall(text)) + len(DMY_MONTH_DASH_REGEX.findall(text))
+    return words + (label_hits * 20) + (date_hits * 50)
+
+
+def _roi_boxes(width: int, height: int) -> Dict[str, Tuple[int, int, int, int]]:
+    return {
+        "roi1": (0, 0, width, int(height * 0.25)),
+        "roi2": (int(width * 0.45), 0, width, int(height * 0.40)),
+        "roi3": (int(width * 0.50), int(height * 0.20), width, int(height * 0.60)),
+    }
+
+
+def _ocr_rois(image, rotation: int, roi_keys: List[str]) -> List[str]:
+    rotated = image.rotate(rotation, expand=True) if rotation else image
+    width, height = rotated.size
+    boxes = _roi_boxes(width, height)
+    texts: List[str] = []
+    for key in roi_keys:
+        box = boxes.get(key)
+        if not box:
+            continue
+        try:
+            crop = rotated.crop(box)
+            text = _ocr_image(
+                crop,
+                rotation=0,
+                config="--psm 6",
+                timeout=min(ROTATION_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS),
+            )
+        except Exception:
+            text = ""
+        texts.append(text)
+    return texts
+
+
 def _detect_osd_rotation(image) -> Optional[int]:
     if not _has_osd_traineddata():
         return None
@@ -429,41 +543,9 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
     }
 
 
-def ocr_first_page(
-    pdf_path: Path,
-    poppler_bin: Optional[Path],
-    pages: int = 1,
-    force_best: bool = False,
-) -> Dict[str, str]:
-    pages = max(1, min(pages, 5))
-    try:
-        try:
-            images = convert_from_path(
-                str(pdf_path),
-                dpi=300,
-                first_page=1,
-                last_page=pages,
-                poppler_path=str(poppler_bin) if poppler_bin else None,
-                timeout=PDF_CONVERT_TIMEOUT,
-            )
-        except TypeError:
-            images = convert_from_path(
-                str(pdf_path),
-                dpi=300,
-                first_page=1,
-                last_page=pages,
-                poppler_path=str(poppler_bin) if poppler_bin else None,
-            )
-    except PDFInfoNotInstalledError:
-        return {"text": "", "error": "Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN"}
-    except (PDFPageCountError, PDFSyntaxError) as exc:
-        return {"text": "", "error": f"pdf_read_failed: {exc}"}
-    except Exception as exc:
-        return {"text": "", "error": f"pdf_convert_failed: {exc}"}
-
+def _ocr_images_best(images: List[object], force_best: bool = False) -> Dict[str, str]:
     if not images:
-        return {"text": "", "error": "Keine Seiten im PDF gefunden."}
-
+        return {"text": "", "error": "ocr_failed: no_text"}
     best_result: Optional[Dict[str, str]] = None
     best_image = None
     best_score = -1
@@ -482,16 +564,25 @@ def ocr_first_page(
             best_result = result
             best_result["page"] = str(idx)
             best_image = image
-
     if not best_result:
         result = {"text": "", "error": last_error or "ocr_failed: no_text"}
-        if images:
-            result["image"] = images[0]
+        result["image"] = images[0]
         return result
-
     if best_image is not None:
         best_result["image"] = best_image
     return best_result
+
+
+def ocr_first_page(
+    pdf_path: Path,
+    poppler_bin: Optional[Path],
+    pages: int = 1,
+    force_best: bool = False,
+) -> Dict[str, str]:
+    images, error = _render_pdf_images(pdf_path, poppler_bin, pages=pages)
+    if error:
+        return {"text": "", "error": error}
+    return _ocr_images_best(images, force_best=force_best)
 
 
 def _normalize_month_key(value: str) -> str:
@@ -526,7 +617,7 @@ def _parse_dmy_short(match: re.Match) -> Optional[datetime]:
     day, month, year_short = (int(part) for part in match.groups())
     if not _valid_day_month(day, month):
         return None
-    if 0 <= year_short <= 69:
+    if 0 <= year_short <= 79:
         year = 2000 + year_short
     else:
         year = 1900 + year_short
@@ -712,6 +803,228 @@ def extract_date_with_priority(text: str) -> Tuple[Optional[datetime], str]:
 
     fallback_date = extract_date(text)
     return fallback_date, "fallback"
+
+
+NUMERIC_DATE_REGEX = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})\b")
+ISO_DATE_REGEX = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def _normalize_date_text(text: str) -> str:
+    cleaned = text.replace(",", ".")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"(?<=\d)[oO](?=\d)", "0", cleaned)
+    cleaned = re.sub(r"(?<=\d)[oO](?=[./-])", "0", cleaned)
+    cleaned = re.sub(r"(?<=[./-])[oO](?=\d)", "0", cleaned)
+    return cleaned.strip()
+
+
+def _parse_numeric_date(day_str: str, month_str: str, year_str: str) -> Optional[datetime]:
+    try:
+        day = int(day_str)
+        month = int(month_str)
+    except ValueError:
+        return None
+    if len(year_str) == 2:
+        try:
+            year_short = int(year_str)
+        except ValueError:
+            return None
+        year = 2000 + year_short if year_short <= 79 else 1900 + year_short
+    else:
+        try:
+            year = int(year_str)
+        except ValueError:
+            return None
+    return _build_date(year, month, day)
+
+
+def _collect_date_candidates(text: str) -> List[Tuple[datetime, str]]:
+    candidates: List[Tuple[datetime, str]] = []
+    normalized = _normalize_date_text(text)
+    for match in ISO_DATE_REGEX.finditer(normalized):
+        dt = _parse_iso(match)
+        if dt:
+            candidates.append((dt, match.group(0)))
+    for match in NUMERIC_DATE_REGEX.finditer(normalized):
+        day_str, month_str, year_str = match.groups()
+        dt = _parse_numeric_date(day_str, month_str, year_str)
+        if dt:
+            candidates.append((dt, match.group(0)))
+    for match in DMY_MONTH_DASH_REGEX.finditer(normalized):
+        dt = _parse_tadano(match)
+        if dt:
+            candidates.append((dt, match.group(0)))
+    return candidates
+
+
+def _extract_candidates_from_lines(
+    lines: List[str],
+    source: str,
+    base_confidence: float,
+) -> List[Dict[str, object]]:
+    candidates: List[Dict[str, object]] = []
+    for idx, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        normalized_line = _normalize_date_text(line)
+        label_type = ""
+        for label_name, pattern in LABEL_PATTERNS:
+            if pattern.search(lower):
+                label_type = label_name
+                break
+        if not label_type and "vom" in lower and ("lieferschein" in lower or "beleg" in lower):
+            label_type = "vom"
+        context_lines = [normalized_line]
+        if idx + 1 < len(lines):
+            context_lines.append(_normalize_date_text(lines[idx + 1]))
+        context_text = " ".join(context_lines)
+        date_candidates = _collect_date_candidates(context_text)
+        if not date_candidates:
+            continue
+        for date_obj, date_str in date_candidates:
+            confidence = base_confidence
+            if label_type == "lieferdatum":
+                confidence += 0.2
+            elif label_type == "belegdatum":
+                confidence += 0.15
+            elif label_type == "rechnungsdatum":
+                confidence += 0.1
+            elif label_type == "druckdatum":
+                confidence += 0.05
+            elif label_type == "vom":
+                confidence += 0.05
+            confidence = min(confidence, 0.99)
+            evidence = raw_line.strip()
+            if len(evidence) > 120:
+                evidence = evidence[:117] + "..."
+            candidates.append(
+                {
+                    "date": date_obj,
+                    "raw": date_str,
+                    "label": label_type or "generic",
+                    "priority": LABEL_PRIORITY.get(label_type or "generic", 99),
+                    "confidence": confidence,
+                    "evidence": evidence,
+                    "source": source,
+                }
+            )
+    if not candidates:
+        for raw_line in lines:
+            normalized_line = _normalize_date_text(raw_line)
+            date_candidates = _collect_date_candidates(normalized_line)
+            for date_obj, date_str in date_candidates:
+                evidence = raw_line.strip()
+                if len(evidence) > 120:
+                    evidence = evidence[:117] + "..."
+                candidates.append(
+                    {
+                        "date": date_obj,
+                        "raw": date_str,
+                        "label": "generic",
+                        "priority": LABEL_PRIORITY.get("generic", 99),
+                        "confidence": base_confidence,
+                        "evidence": evidence,
+                        "source": source,
+                    }
+                )
+    return candidates
+
+
+def _select_best_candidate(candidates: List[Dict[str, object]]) -> Optional[Dict[str, object]]:
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item.get("priority", 99),
+            -(item.get("confidence", 0.0) or 0.0),
+        ),
+    )[0]
+
+
+def _extract_date_from_filename(filename: str) -> Optional[Dict[str, object]]:
+    candidates = _extract_candidates_from_lines([filename], "filename_fallback", 0.40)
+    return _select_best_candidate(candidates)
+
+
+def extract_best_date(
+    pdf_path: Path,
+    images: Optional[List[object]] = None,
+    textlayer_pages: Optional[List[str]] = None,
+    pages: int = OCR_PAGES,
+) -> Dict[str, object]:
+    textlayer_pages = textlayer_pages or []
+    if not textlayer_pages:
+        textlayer_pages, text_err = _extract_textlayer(pdf_path, pages=pages)
+        if text_err:
+            _LOGGER.warning("date textlayer error: %s", text_err)
+    textlayer_text = "\n".join(textlayer_pages)
+    textlayer_words = len(textlayer_text.split())
+    if textlayer_text.strip() and (len(textlayer_text.strip()) >= 80 or textlayer_words >= 12):
+        candidates = _extract_candidates_from_lines(textlayer_text.splitlines(), "textlayer", 0.90)
+        best = _select_best_candidate(candidates)
+        if best:
+            _LOGGER.info(
+                "date textlayer selected label=%s conf=%.2f",
+                best.get("label"),
+                best.get("confidence", 0.0),
+            )
+            return best
+
+    if images is None:
+        images, img_err = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=pages)
+        if img_err:
+            _LOGGER.warning("date ocr render error: %s", img_err)
+            images = []
+
+    if images:
+        candidates_log: List[Tuple[int, int, int]] = []
+        best_score = -1
+        best_rotation = 0
+        best_image = images[0]
+        for page_idx, image in enumerate(images, start=1):
+            for rotation in (0, 90, 180, 270):
+                texts = _ocr_rois(image, rotation, ["roi1", "roi2"])
+                combined = " ".join(texts)
+                score = _score_rotation_text(combined)
+                candidates_log.append((page_idx, rotation, score))
+                if score > best_score:
+                    best_score = score
+                    best_rotation = rotation
+                    best_image = image
+        candidates_log.sort(key=lambda item: item[2], reverse=True)
+        _LOGGER.info(
+            "date rotation selected=%s candidates=%s",
+            best_rotation,
+            candidates_log[:4],
+        )
+        final_texts = _ocr_rois(best_image, best_rotation, ["roi1", "roi2", "roi3"])
+        combined_text = "\n".join(final_texts)
+        candidates = _extract_candidates_from_lines(combined_text.splitlines(), "ocr", 0.70)
+        best = _select_best_candidate(candidates)
+        if best:
+            _LOGGER.info(
+                "date ocr selected label=%s conf=%.2f",
+                best.get("label"),
+                best.get("confidence", 0.0),
+            )
+            return best
+
+    filename_candidate = _extract_date_from_filename(pdf_path.name)
+    if filename_candidate:
+        _LOGGER.info("date filename fallback selected conf=%.2f", filename_candidate.get("confidence", 0.0))
+        return filename_candidate
+
+    return {
+        "date": None,
+        "label": "none",
+        "priority": LABEL_PRIORITY.get("generic", 99),
+        "confidence": 0.0,
+        "evidence": "",
+        "source": "none",
+    }
 
 def load_suppliers_db() -> Dict[str, List[Dict[str, object]]]:
     SUPPLIERS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1001,6 +1314,8 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "supplier_gibberish": "",
         "date": "",
         "date_source": "",
+        "date_confidence": "",
+        "date_evidence": "",
         "out_name": "",
         "status": "error",
         "error": "",
@@ -1014,10 +1329,15 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "parsing_failed": False,
     }
 
-    ocr_result = ocr_first_page(pdf_path, _POPPLER_BIN, pages=OCR_PAGES, force_best=True)
+    images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
+    if render_error:
+        result["error"] = render_error
+        result["parsing_failed"] = True
+    ocr_result = _ocr_images_best(images, force_best=True) if images else {"text": "", "error": render_error}
     text = ""
     if ocr_result["error"]:
-        result["error"] = ocr_result["error"]
+        if not result["error"]:
+            result["error"] = ocr_result["error"]
         result["parsing_failed"] = True
     else:
         text = ocr_result["text"]
@@ -1036,11 +1356,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         supplier_source = "none"
         supplier_guess_line = ""
         gibberish = True
-    date_obj, date_source = extract_date_with_priority(text)
-    if not date_obj:
-        date_obj = _extract_date_from_crops(ocr_result.get("image"), rotation_value, text)
-        if date_obj:
-            date_source = "crop"
+    textlayer_pages, _ = _extract_textlayer(pdf_path, pages=OCR_PAGES)
+    date_pick = extract_best_date(pdf_path, images=images, textlayer_pages=textlayer_pages, pages=OCR_PAGES)
+    date_obj = date_pick.get("date")
+    date_source = date_pick.get("source", "")
+    date_confidence = date_pick.get("confidence", 0.0) or 0.0
+    date_evidence = date_pick.get("evidence", "") or ""
     result["supplier"] = supplier
     result["supplier_confidence"] = f"{supplier_confidence:.2f}" if supplier_confidence else ""
     result["supplier_source"] = supplier_source
@@ -1048,6 +1369,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     result["supplier_gibberish"] = "1" if gibberish else ""
     result["date"] = date_obj.strftime(INTERNAL_DATE_FORMAT) if date_obj else ""
     result["date_source"] = date_source if date_obj else ""
+    result["date_confidence"] = f"{date_confidence:.2f}" if date_obj else ""
+    result["date_evidence"] = date_evidence if date_obj else ""
+    if date_source == "filename_fallback":
+        result["parsing_failed"] = True
 
     new_filename = build_new_filename(supplier, date_obj, date_format=date_format)
     target_path, move_error = _move_pdf_with_name(pdf_path, output_dir, new_filename)
@@ -1177,6 +1502,30 @@ def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT
         )
 
     return results
+
+
+def _print_date_candidates(paths: List[str]) -> None:
+    for raw in paths:
+        pdf_path = Path(raw)
+        if not pdf_path.exists():
+            print(f"{raw} -> not found")
+            continue
+        images, _ = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
+        pick = extract_best_date(pdf_path, images=images, pages=OCR_PAGES)
+        date_obj = pick.get("date")
+        date_iso = date_obj.strftime(INTERNAL_DATE_FORMAT) if date_obj else "-"
+        print(
+            f"{pdf_path.name} -> {date_iso} | {pick.get('source')} | "
+            f"{pick.get('confidence', 0.0):.2f} | {pick.get('evidence', '')}"
+        )
+
+
+if __name__ == "__main__":
+    # Example: python -m core.extractor "PV_04.11.2025.pdf" "WM_*.pdf"
+    import sys
+
+    if len(sys.argv) > 1:
+        _print_date_candidates(sys.argv[1:])
 
 
 

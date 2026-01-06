@@ -24,12 +24,12 @@
           {% if supplier_guess_line %}
             <label class="viewer-checkbox">
               <input type="checkbox" name="alias_from_ocr" value="1" checked />
-              <span>Alias aus OCR-Zeile uebernehmen</span>
+              <span>Alias aus OCR-Zeile übernehmen</span>
             </label>
           {% endif %}
           <button type="submit">Speichern</button>
-          <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurueck zur Uebersicht</a>
-          <a class="viewer-link" href="{{ url_for('review_next', current=file_id) }}">Weiter (naechste Unvollstaendige)</a>
+          <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurück zur Übersicht</a>
+          <a class="viewer-link" href="{{ url_for('review_next', current=file_id) }}">Weiter (nächste Unvollständige)</a>
           {% if review_total %}
             <span class="viewer-badge">Review {{ review_index or 1 }}/{{ review_total }}</span>
           {% endif %}
@@ -71,8 +71,8 @@
       </div>
       {% if pdf_missing %}
         <div class="viewer-error-banner">
-          <span>Datei nicht gefunden. Bitte zurueck zur Uebersicht.</span>
-          <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurueck zur Uebersicht</a>
+          <span>Datei nicht gefunden. Bitte zurück zur Übersicht.</span>
+          <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurück zur Übersicht</a>
         </div>
       {% endif %}
       <div class="viewer-content">
