@@ -40,35 +40,25 @@ if str(BASE_DIR) not in sys.path:
 
 from core.extractor import (
     load_suppliers_db,
-    normalize_text,
     process_folder,
     get_unique_path,
     save_suppliers_db,
     build_new_filename,
     INTERNAL_DATE_FORMAT,
 )
-DATA_DIR = BASE_DIR / "data"
-INBOX_DIR = DATA_DIR / "eingang"
-OUT_DIR = DATA_DIR / "fertig"
-TMP_DIR = DATA_DIR / "tmp"
-SUPPLIER_CORRECTIONS_PATH = DATA_DIR / "supplier_corrections.json"
-SESSION_FILES_PATH = DATA_DIR / "session_files.json"
-SESSION_FILES_LOCK = DATA_DIR / "session_files.lock"
+from utils import normalize_text
+from config import Config
 
-ALLOWED_EXTENSIONS = {".pdf"}
-ALLOWED_DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%Y%m%d")
-MANUAL_DATE_FORMATS = (
-    "%Y-%m-%d",
-    "%d.%m.%Y",
-    "%d.%m.%y",
-    "%d-%m-%Y",
-    "%d-%m-%y",
-    "%Y/%m/%d",
-    "%d/%m/%Y",
-    "%d/%m/%y",
-)
-HISTORY_PATH = DATA_DIR / "history.jsonl"
-LOG_RETENTION_DAYS = int(os.getenv("DOCARO_LOG_RETENTION_DAYS", "90"))
+config = Config()
+DATA_DIR = config.DATA_DIR
+INBOX_DIR = config.INBOX_DIR
+OUT_DIR = config.OUT_DIR
+TMP_DIR = config.TMP_DIR
+SUPPLIER_CORRECTIONS_PATH = config.SUPPLIER_CORRECTIONS_PATH
+SESSION_FILES_PATH = config.SESSION_FILES_PATH
+SESSION_FILES_LOCK = config.SESSION_FILES_LOCK
+HISTORY_PATH = config.HISTORY_PATH
+LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 
 try:
     import msvcrt  # type: ignore
@@ -80,51 +70,27 @@ try:
 except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
 
-DEBUG_MODE = os.getenv("DOCARO_DEBUG") == "1"
+DEBUG_MODE = config.DEBUG
 
 app = Flask(__name__)
-_secret = os.getenv("DOCARO_SECRET_KEY")
-if not _secret:
-    if os.getenv("DOCARO_ALLOW_INSECURE_SECRET") == "1":
-        _secret = secrets.token_hex(32)
-    else:
-        raise RuntimeError(
-            "DOCARO_SECRET_KEY fehlt. Bitte setzen. Beispiel (PowerShell): "
-            '$env:DOCARO_SECRET_KEY="change-me-please" '
-            "(optional nur fuer Tests: DOCARO_ALLOW_INSECURE_SECRET=1)."
-        )
-app.secret_key = _secret
-LOG_DIR = DATA_DIR / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_PATH = LOG_DIR / "server.log"
-_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
-_handler.setLevel(logging.INFO)
-_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-logging.basicConfig(level=logging.INFO, handlers=[_handler])
-app.logger.addHandler(_handler)
-app.logger.setLevel(logging.INFO)
+app.secret_key = config.SECRET_KEY
+
+# Zentrales Logging einrichten
+logger = config.setup_logging()
+app.logger = logger
+
 app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config["DEBUG"] = DEBUG_MODE
 
-_werkzeug_logger = logging.getLogger("werkzeug")
-_werkzeug_logger.addHandler(_handler)
-_werkzeug_logger.setLevel(logging.INFO)
-
 
 def _log_exception(context: str, exc: Exception) -> None:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    with LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(f"{datetime.now().isoformat(timespec='seconds')} ERROR {context}\n")
-        handle.write(f"{repr(exc)}\n")
-        handle.write(traceback.format_exc())
-        handle.write("\n")
+    logger.exception(f"Exception in {context}: {exc}")
 
 
 @app.before_request
 def _trace_upload_requests():
     if request.path == "/upload":
-        with LOG_PATH.open("a", encoding="utf-8") as handle:
-            handle.write(f"{datetime.now().isoformat(timespec='seconds')} INFO request {request.method} {request.path}\n")
+        logger.info(f"Request {request.method} {request.path}")
 
 
 if not DEBUG_MODE:
@@ -139,7 +105,7 @@ if not DEBUG_MODE:
 @app.after_request
 def _log_server_errors(response):
     if response.status_code >= 500:
-        app.logger.error(
+        logger.error(
             "HTTP %s %s -> %s",
             request.method,
             request.path,
@@ -687,7 +653,7 @@ def resolve_pdf_path(filename: str) -> Optional[Path]:
             candidate = root / name
             if candidate.exists():
                 return candidate
-    if os.getenv("DOCARO_DEEP_SCAN") == "1":
+    if config.DEEP_SCAN:
         for root in roots:
             if not root.exists():
                 continue

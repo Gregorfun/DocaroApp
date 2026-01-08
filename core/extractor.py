@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import re
 import shutil
 import shlex
 import logging
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -15,54 +17,68 @@ from typing import Dict, List, Optional, Tuple
 from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError, PDFSyntaxError
 import pytesseract
+from PIL import ImageEnhance
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+try:
+    import date_parser  # type: ignore
+except ImportError:
+    try:
+        from core import date_parser  # type: ignore
+    except ImportError:
+        date_parser = None
+
+from config import Config
+
+config = Config()
+from constants import DATE_REGEX_PATTERNS, LABEL_PATTERNS, LABEL_PRIORITY, DATE_LABELS
+from utils import first_path_from_env, has_pdfinfo
+
+def normalize_text(text: str) -> str:
+    """Normalisiert Text für OCR: Entfernt überflüssige Leerzeichen und Zeilenumbrüche."""
+    if not text:
+        return ""
+    # Entferne Zeilenumbrüche und Tabs, ersetze durch Leerzeichen
+    text = re.sub(r'[\n\r\t]+', ' ', text)
+    # Entferne Nicht-Alphanumerisch außer Leerzeichen und Umlauten
+    text = re.sub(r'[^\w\säöüÄÖÜß]', '', text)
+    # Entferne mehrfache Leerzeichen
+    text = re.sub(r' +', ' ', text)
+    return text.strip()
+
+BASE_DIR = config.BASE_DIR
 DEFAULT_DATE_FORMAT = "%Y-%m-%d"
 INTERNAL_DATE_FORMAT = "%Y-%m-%d"
-SUPPLIERS_DB_PATH = BASE_DIR / "data" / "suppliers.json"
-OCR_TIMEOUT_SECONDS = int(os.getenv("DOCARO_OCR_TIMEOUT", "20"))
-PDF_CONVERT_TIMEOUT = int(os.getenv("DOCARO_PDF_CONVERT_TIMEOUT", "40"))
-ROTATION_OCR_TIMEOUT = int(os.getenv("DOCARO_ROTATION_OCR_TIMEOUT", "8"))
-DATE_CROP_OCR_TIMEOUT = int(os.getenv("DOCARO_DATE_CROP_OCR_TIMEOUT", "10"))
-OCR_PAGES = max(1, min(int(os.getenv("DOCARO_OCR_PAGES", "2")), 5))
-LOG_RETENTION_DAYS = int(os.getenv("DOCARO_LOG_RETENTION_DAYS", "90"))
-DEBUG_EXTRACT = os.getenv("DOCARO_DEBUG_EXTRACT") == "1"
-DEBUG_LOG_PATH = BASE_DIR / "data" / "logs" / "extract_debug.log"
+SUPPLIERS_DB_PATH = config.DATA_DIR / "suppliers.json"
+OCR_TIMEOUT_SECONDS = config.OCR_TIMEOUT_SECONDS
+PDF_CONVERT_TIMEOUT = config.PDF_CONVERT_TIMEOUT
+ROTATION_OCR_TIMEOUT = config.ROTATION_OCR_TIMEOUT
+DATE_CROP_OCR_TIMEOUT = config.DATE_CROP_OCR_TIMEOUT
+OCR_PAGES = config.OCR_PAGES
+LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
+DEBUG_EXTRACT = config.DEBUG_EXTRACT
+DEBUG_LOG_PATH = config.LOG_DIR / "extract_debug.log"
 _LOGGER = logging.getLogger(__name__)
+_LOG_LOCK = threading.Lock()
+_FS_LOCK = threading.Lock()
 
 
 def _has_pdfinfo(bin_dir: Path) -> bool:
-    if not bin_dir or not bin_dir.exists():
-        return False
-    return (bin_dir / "pdfinfo.exe").exists() or (bin_dir / "pdfinfo").exists()
+    return has_pdfinfo(bin_dir)
 
 
 def _first_path_from_env(value: str) -> Optional[Path]:
-    if not value:
-        return None
-    cleaned = value.strip().strip('"').strip("'")
-    if not cleaned:
-        return None
-    try:
-        parts = shlex.split(cleaned, posix=False)
-    except ValueError:
-        parts = [cleaned]
-    if not parts:
-        return None
-    return Path(parts[0])
+    return first_path_from_env(value)
 
 
 def _resolve_tesseract_cmd() -> Tuple[Optional[Path], bool]:
-    for env_key in ("DOCARO_TESSERACT_CMD", "TESSERACT_CMD", "DOCARO_TESSERACT"):
-        env_path = os.getenv(env_key)
-        if env_path:
-            candidate = _first_path_from_env(env_path)
-            if candidate and candidate.exists():
-                return candidate, True
-            if candidate and candidate.is_dir():
-                exe_candidate = candidate / "tesseract.exe"
-                if exe_candidate.exists():
-                    return exe_candidate, True
+    if config.TESSERACT_CMD:
+        candidate = _first_path_from_env(config.TESSERACT_CMD)
+        if candidate and candidate.exists():
+            return candidate, True
+        if candidate and candidate.is_dir():
+            exe_candidate = candidate / "tesseract.exe"
+            if exe_candidate.exists():
+                return exe_candidate, True
     fallback_paths = [
         BASE_DIR / "Tesseract OCR Windows installer" / "tesseract.exe",
         Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
@@ -78,9 +94,8 @@ def _resolve_tesseract_cmd() -> Tuple[Optional[Path], bool]:
 
 
 def _resolve_poppler_bin() -> Tuple[Optional[Path], bool]:
-    env_path = os.getenv("DOCARO_POPPLER_BIN")
-    if env_path:
-        candidate = _first_path_from_env(env_path)
+    if config.POPPLER_BIN:
+        candidate = _first_path_from_env(config.POPPLER_BIN)
         if candidate:
             if candidate.is_dir() and _has_pdfinfo(candidate):
                 return candidate, True
@@ -179,27 +194,41 @@ DATE_LABELS = [
     "datum",
 ]
 
+DELIVERY_NOTE_KEYWORDS = [
+    "lieferschein-nr",
+    "lieferscheinnr",
+    "lieferscheinnummer",
+    "ls-nr",
+    "lieferschein nr",
+]
+
+def extract_delivery_note_number(text: str) -> Optional[str]:
+    """
+    Extracts the delivery note number from the text.
+    Searches for keywords and extracts the following number.
+    """
+    for line in text.splitlines():
+        for keyword in DELIVERY_NOTE_KEYWORDS:
+            # Create a regex to find the keyword and capture what follows
+            # This looks for the keyword, then optional non-alphanumeric chars, then captures the number.
+            pattern = re.compile(rf"{re.escape(keyword)}[^a-zA-Z0-9]*([a-zA-Z0-9/\-]+)", re.IGNORECASE)
+            match = pattern.search(line)
+            if match:
+                number = match.group(1)
+                # Basic validation: should be longer than 3 chars and contain a digit.
+                if len(number) > 3 and any(c.isdigit() for c in number):
+                    return number
+    return None
+
+
+
 CANONICAL_SUPPLIERS = {
     "vergoelst": "Vergoelst",
     "vergolst": "Vergoelst",
     "verglst": "Vergoelst",
 }
 
-LABEL_PATTERNS = [
-    ("lieferdatum", re.compile(r"\b(lieferscheindatum|lieferdatum|liefertermin|tag der lieferung)\b", re.IGNORECASE)),
-    ("belegdatum", re.compile(r"\b(beleg[-\s]?datum)\b", re.IGNORECASE)),
-    ("rechnungsdatum", re.compile(r"\b(rechn\.?-?\s*dat\.?|rechnungsdatum)\b", re.IGNORECASE)),
-    ("druckdatum", re.compile(r"\b(druckdatum(?:\s*[/\-]?\s*zeit)?|druckdatum/-zeit)\b", re.IGNORECASE)),
-]
-
-LABEL_PRIORITY = {
-    "lieferdatum": 1,
-    "belegdatum": 2,
-    "rechnungsdatum": 3,
-    "druckdatum": 4,
-    "vom": 5,
-    "generic": 6,
-}
+# LABEL_PATTERNS und LABEL_PRIORITY aus constants.py verwendet
 
 MONTH_MAP = {
     "jan": "01",
@@ -233,30 +262,21 @@ MONTH_MAP = {
     "dezember": "12",
 }
 
-MONTH_NAME_REGEX = re.compile(r"\b(\d{1,2})[.\s]+([A-Za-z]+)[.\s]+(\d{4})\b", flags=re.IGNORECASE)
-DMY_MONTH_DASH_REGEX = re.compile(r"\b(\d{1,2})-([A-Za-z]{3})-(\d{4})\b", flags=re.IGNORECASE)
-ISO_REGEX = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
-YMD_SLASH_REGEX = re.compile(r"\b(\d{4})/(\d{2})/(\d{2})\b")
-DMY_DOT_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
-DMY_DASH_REGEX = re.compile(r"\b(\d{1,2})-(\d{1,2})-(\d{4})\b")
-DMY_SLASH_REGEX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
-DMY_DOT_SHORT_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b")
-DMY_DASH_SHORT_REGEX = re.compile(r"\b(\d{1,2})-(\d{1,2})-(\d{2})\b")
-DMY_SLASH_SHORT_REGEX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2})\b")
-VERGOELST_REGEX = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b")
-TADANO_REGEX = re.compile(r"\b(\d{1,2})-([A-Za-z]{3})-(\d{4})\b", flags=re.IGNORECASE)
-DATE_REGEXES = [
-    ISO_REGEX,
-    YMD_SLASH_REGEX,
-    DMY_DOT_REGEX,
-    DMY_DASH_REGEX,
-    DMY_SLASH_REGEX,
-    DMY_DOT_SHORT_REGEX,
-    DMY_DASH_SHORT_REGEX,
-    DMY_SLASH_SHORT_REGEX,
-    MONTH_NAME_REGEX,
-    DMY_MONTH_DASH_REGEX,
-]
+# Regex-Patterns aus constants.py verwenden
+ISO_REGEX = DATE_REGEX_PATTERNS["iso"]
+YMD_SLASH_REGEX = DATE_REGEX_PATTERNS["ymd_slash"]
+DMY_DOT_REGEX = DATE_REGEX_PATTERNS["dmy_dot"]
+DMY_DASH_REGEX = DATE_REGEX_PATTERNS["dmy_dash"]
+DMY_SLASH_REGEX = DATE_REGEX_PATTERNS["dmy_slash"]
+DMY_DOT_SHORT_REGEX = DATE_REGEX_PATTERNS["dmy_dot_short"]
+DMY_DASH_SHORT_REGEX = DATE_REGEX_PATTERNS["dmy_dash_short"]
+DMY_SLASH_SHORT_REGEX = DATE_REGEX_PATTERNS["dmy_slash_short"]
+MONTH_NAME_REGEX = DATE_REGEX_PATTERNS["month_name"]
+DMY_MONTH_DASH_REGEX = DATE_REGEX_PATTERNS["dmy_month_dash"]
+VERGOELST_REGEX = DATE_REGEX_PATTERNS["vergoelst"]
+TADANO_REGEX = DATE_REGEX_PATTERNS["tadano"]
+
+DATE_REGEXES = list(DATE_REGEX_PATTERNS.values())
 
 
 def _has_osd_traineddata() -> bool:
@@ -272,6 +292,11 @@ def _has_osd_traineddata() -> bool:
 def _ocr_image(image, rotation: int, config: str = "", timeout: Optional[int] = None) -> str:
     if rotation:
         image = image.rotate(rotation, expand=True)
+
+    image = image.convert("L")
+    enhancer = ImageEnhance.Contrast(image)
+    image = enhancer.enhance(1.5)
+
     effective_timeout = OCR_TIMEOUT_SECONDS if timeout is None else timeout
     return pytesseract.image_to_string(
         image,
@@ -317,7 +342,7 @@ def _rotation_candidates_from_crops(image) -> List[Tuple[int, int]]:
     for rotation in (0, 90, 180, 270):
         try:
             rotated = image.rotate(rotation, expand=True) if rotation else image
-        except Exception:
+        except (OSError, ValueError):
             candidates.append((rotation, 0))
             continue
         width, height = rotated.size
@@ -331,7 +356,7 @@ def _rotation_candidates_from_crops(image) -> List[Tuple[int, int]]:
                     config="--psm 6",
                     timeout=min(ROTATION_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS),
                 )
-            except Exception:
+            except (pytesseract.TesseractError, TimeoutError):
                 continue
             score = max(score, _rotation_score(text))
         candidates.append((rotation, score))
@@ -383,18 +408,39 @@ def _extract_textlayer(pdf_path: Path, pages: int = 1) -> Tuple[List[str], str]:
         with pdfplumber.open(str(pdf_path)) as pdf:
             for page in pdf.pages[:pages]:
                 texts.append(page.extract_text() or "")
-        return texts, ""
-    except Exception:
-        pass
+        if any(t.strip() for t in texts):
+            return texts, ""
+    except ImportError:
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print("!!! ACHTUNG: Das Paket 'pdfplumber' zum PDF-Lesen wurde nicht gefunden.")
+        print("!!! Dies beeinträchtigt die Datumserkennung.")
+        print("!!! Bitte führen Sie den folgenden Befehl in Ihrer Powershell aus:")
+        print(r"!!!   .\.venv\Scripts\pip.exe install -r requirements.txt")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        _LOGGER.debug("pdfplumber not installed, falling back to PyPDF2.")
+    except ImportError as e:
+        _LOGGER.debug("pdfplumber failed, falling back to PyPDF2. Error: %s", e)
+
+    texts = []
     try:
         from PyPDF2 import PdfReader  # type: ignore
 
         reader = PdfReader(str(pdf_path))
         for page in reader.pages[:pages]:
             texts.append(page.extract_text() or "")
-        return texts, ""
-    except Exception as exc:
-        return [], f"textlayer_failed: {exc}"
+        if any(t.strip() for t in texts):
+            return texts, ""
+    except ImportError:
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print("!!! ACHTUNG: Das Paket 'PyPDF2' zum PDF-Lesen wurde nicht gefunden.")
+        print("!!! Dies beeinträchtigt die Datumserkennung.")
+        print("!!! Bitte führen Sie den folgenden Befehl in Ihrer Powershell aus:")
+        print(r"!!!   .\.venv\Scripts\pip.exe install -r requirements.txt")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        return [], "textlayer_failed: PyPDF2 is not installed. Run: .venv\\Scripts\\pip.exe install -r requirements.txt"
+    except (OSError, ValueError) as e:
+        return [], f"PyPDF2 failed: {e}"
+    return [], ""
 
 
 def _score_rotation_text(text: str) -> int:
@@ -409,6 +455,7 @@ def _roi_boxes(width: int, height: int) -> Dict[str, Tuple[int, int, int, int]]:
         "roi1": (0, 0, width, int(height * 0.25)),
         "roi2": (int(width * 0.45), 0, width, int(height * 0.40)),
         "roi3": (int(width * 0.50), int(height * 0.20), width, int(height * 0.60)),
+        "roi4": (int(width * 0.25), 0, int(width * 0.75), int(height * 0.25)),
     }
 
 
@@ -429,7 +476,7 @@ def _ocr_rois(image, rotation: int, roi_keys: List[str]) -> List[str]:
                 config="--psm 6",
                 timeout=min(ROTATION_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS),
             )
-        except Exception:
+        except (pytesseract.TesseractError, TimeoutError):
             text = ""
         texts.append(text)
     return texts
@@ -440,7 +487,7 @@ def _detect_osd_rotation(image) -> Optional[int]:
         return None
     try:
         osd = pytesseract.image_to_osd(image, timeout=min(ROTATION_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS))
-    except Exception:
+    except (pytesseract.TesseractError, TimeoutError):
         return None
     match = re.search(r"Rotate:\s*(\d+)", osd)
     if not match:
@@ -455,7 +502,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
     def _safe_ocr(rotation: int) -> Tuple[str, str, int]:
         try:
             text_value = _ocr_image(image, rotation=rotation)
-        except Exception as exc:
+        except (pytesseract.TesseractError, TimeoutError) as exc:
             message = str(exc)
             if "timeout" in message.lower():
                 return "", "ocr_timeout", 0
@@ -508,7 +555,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
             }
         try:
             rotated_text = _ocr_image(image, rotation=osd_rotation)
-        except Exception as exc:
+        except (pytesseract.TesseractError, TimeoutError) as exc:
             return {"text": "", "error": f"ocr_failed: {exc}"}
         score = _score_text(rotated_text)
         return {
@@ -954,6 +1001,7 @@ def extract_best_date(
     images: Optional[List[object]] = None,
     textlayer_pages: Optional[List[str]] = None,
     pages: int = OCR_PAGES,
+    known_rotation: Optional[int] = None,
 ) -> Dict[str, object]:
     textlayer_pages = textlayer_pages or []
     if not textlayer_pages:
@@ -963,6 +1011,22 @@ def extract_best_date(
     textlayer_text = "\n".join(textlayer_pages)
     textlayer_words = len(textlayer_text.split())
     if textlayer_text.strip() and (len(textlayer_text.strip()) >= 80 or textlayer_words >= 12):
+        if date_parser:
+            dp_iso, dp_reason = date_parser.extract_date_from_text(textlayer_text)
+            if dp_iso:
+                try:
+                    dp_date = datetime.strptime(dp_iso, "%Y-%m-%d")
+                    _LOGGER.info("date_parser (textlayer) found: %s (%s)", dp_iso, dp_reason)
+                    return {
+                        "date": dp_date,
+                        "label": "smart_parser",
+                        "priority": 1,
+                        "confidence": 0.95,
+                        "evidence": dp_reason,
+                        "source": "textlayer_smart",
+                    }
+                except ValueError:
+                    pass
         candidates = _extract_candidates_from_lines(textlayer_text.splitlines(), "textlayer", 0.90)
         best = _select_best_candidate(candidates)
         if best:
@@ -984,9 +1048,16 @@ def extract_best_date(
         best_score = -1
         best_rotation = 0
         best_image = images[0]
+
+        rotations = (0, 90, 180, 270)
+        # Wenn eine Rotation bekannt ist, zuerst diese testen, dann die übrigen als Fallback
+        if known_rotation is not None:
+            base = (0, 90, 180, 270)
+            rotations = (known_rotation,) + tuple(r for r in base if r != known_rotation)
+
         for page_idx, image in enumerate(images, start=1):
-            for rotation in (0, 90, 180, 270):
-                texts = _ocr_rois(image, rotation, ["roi1", "roi2"])
+            for rotation in rotations:
+                texts = _ocr_rois(image, rotation, ["roi1", "roi2", "roi3"])
                 combined = " ".join(texts)
                 score = _score_rotation_text(combined)
                 candidates_log.append((page_idx, rotation, score))
@@ -1002,6 +1073,22 @@ def extract_best_date(
         )
         final_texts = _ocr_rois(best_image, best_rotation, ["roi1", "roi2", "roi3"])
         combined_text = "\n".join(final_texts)
+        if date_parser:
+            dp_iso, dp_reason = date_parser.extract_date_from_text(combined_text)
+            if dp_iso:
+                try:
+                    dp_date = datetime.strptime(dp_iso, "%Y-%m-%d")
+                    _LOGGER.info("date_parser (ocr) found: %s (%s)", dp_iso, dp_reason)
+                    return {
+                        "date": dp_date,
+                        "label": "smart_parser",
+                        "priority": 1,
+                        "confidence": 0.90,
+                        "evidence": dp_reason,
+                        "source": "ocr_smart",
+                    }
+                except ValueError:
+                    pass
         candidates = _extract_candidates_from_lines(combined_text.splitlines(), "ocr", 0.70)
         best = _select_best_candidate(candidates)
         if best:
@@ -1011,6 +1098,52 @@ def extract_best_date(
                 best.get("confidence", 0.0),
             )
             return best
+
+        crop_date = _extract_date_from_crops(best_image, best_rotation, combined_text)
+        if crop_date:
+            _LOGGER.info("date ocr_crop selected")
+            return {
+                "date": crop_date,
+                "label": "ocr_crop",
+                "priority": 2,
+                "confidence": 0.80,
+                "evidence": "Targeted OCR on date fields",
+                "source": "ocr_crop",
+            }
+
+        # Fallback to full page OCR
+        _LOGGER.info("ROI OCR found no date. Falling back to full page OCR.")
+        try:
+            full_text = _ocr_image(best_image, best_rotation, timeout=OCR_TIMEOUT_SECONDS)
+            if full_text and date_parser:
+                dp_iso, dp_reason = date_parser.extract_date_from_text(full_text)
+                if dp_iso:
+                    try:
+                        dp_date = datetime.strptime(dp_iso, "%Y-%m-%d")
+                        _LOGGER.info("date_parser (ocr_full) found: %s (%s)", dp_iso, dp_reason)
+                        return {
+                            "date": dp_date,
+                            "label": "smart_parser_full",
+                            "priority": 1,
+                            "confidence": 0.85,
+                            "evidence": dp_reason,
+                            "source": "ocr_smart_full",
+                        }
+                    except ValueError:
+                        pass
+            
+            if full_text:
+                candidates = _extract_candidates_from_lines(full_text.splitlines(), "ocr_full", 0.60)
+                best = _select_best_candidate(candidates)
+                if best:
+                    _LOGGER.info(
+                        "date ocr_full selected label=%s conf=%.2f",
+                        best.get("label"),
+                        best.get("confidence", 0.0),
+                    )
+                    return best
+        except (pytesseract.TesseractError, TimeoutError) as e:
+            _LOGGER.warning("Full page OCR fallback failed: %s", e)
 
     filename_candidate = _extract_date_from_filename(pdf_path.name)
     if filename_candidate:
@@ -1043,7 +1176,7 @@ def save_suppliers_db(data: Dict[str, List[Dict[str, object]]]) -> None:
     SUPPLIERS_DB_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def normalize_text(value: str) -> str:
+def _normalize_supplier_text(value: str) -> str:
     lowered = value.lower()
     lowered = lowered.replace("\u00df", "ss").replace("\u00e4", "ae").replace("\u00f6", "oe").replace("\u00fc", "ue")
     lowered = re.sub(r"[^a-z0-9]+", " ", lowered)
@@ -1051,13 +1184,13 @@ def normalize_text(value: str) -> str:
 
 
 def _canonicalize_supplier(name: str) -> str:
-    normalized = normalize_text(name)
+    normalized = _normalize_supplier_text(name)
     return CANONICAL_SUPPLIERS.get(normalized, name)
 
 
 def _detect_supplier_from_db(text: str) -> Optional[Tuple[str, str]]:
     data = load_suppliers_db()
-    normalized_text = normalize_text(text)
+    normalized_text = _normalize_supplier_text(text)
     entries = list(data.get("suppliers", []))
     entries.append({"name": "Vergoelst", "aliases": VERGOELST_ALIASES})
     for entry in entries:
@@ -1065,7 +1198,7 @@ def _detect_supplier_from_db(text: str) -> Optional[Tuple[str, str]]:
         aliases = entry.get("aliases", [])
         candidates = [name] + [str(alias) for alias in aliases if alias]
         for alias in candidates:
-            normalized_alias = normalize_text(alias)
+            normalized_alias = _normalize_supplier_text(alias)
             if normalized_alias and normalized_alias in normalized_text:
                 return name or alias, alias
     return None
@@ -1121,7 +1254,7 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
     best_line = None
     best_score = 0.0
     for line in top_lines:
-        normalized_line = normalize_text(line)
+        normalized_line = _normalize_supplier_text(line)
         if not normalized_line or any(term in normalized_line for term in blocked_terms):
             continue
         score = 0.0
@@ -1143,13 +1276,13 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
 
 
 def detect_supplier(text: str) -> Tuple[str, float, str, str]:
-    normalized_text = normalize_text(text)
+    normalized_text = _normalize_supplier_text(text)
     normalized_head = normalized_text[: max(1, int(len(normalized_text) * 0.25))] if normalized_text else ""
     db_hit = _detect_supplier_from_db(text)
     if db_hit:
         supplier_name, alias = db_hit
         supplier_name = _canonicalize_supplier(supplier_name)
-        normalized_alias = normalize_text(alias)
+        normalized_alias = _normalize_supplier_text(alias)
         confidence = 0.90
         if normalized_alias and normalized_alias in normalized_head:
             confidence = min(confidence + 0.1, 1.0)
@@ -1158,7 +1291,7 @@ def detect_supplier(text: str) -> Tuple[str, float, str, str]:
     keyword_candidates = list(SUPPLIER_KEYWORDS.items())
     keyword_candidates.extend((alias, "Vergoelst") for alias in VERGOELST_ALIASES)
     for keyword, shortname in keyword_candidates:
-        normalized_keyword = normalize_text(keyword)
+        normalized_keyword = _normalize_supplier_text(keyword)
         if not normalized_keyword:
             continue
         if normalized_keyword in normalized_text:
@@ -1181,9 +1314,12 @@ def _ocr_date_crop(image, crop_box: Tuple[int, int, int, int]) -> str:
     config = "--psm 7 -c tessedit_char_whitelist=0123456789./-"
     try:
         return _ocr_image(crop, rotation=0, config=config, timeout=min(DATE_CROP_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS))
-    except Exception:
+    except (pytesseract.TesseractError, TimeoutError):
         config = "--psm 6 -c tessedit_char_whitelist=0123456789./-"
-        return _ocr_image(crop, rotation=0, config=config, timeout=min(DATE_CROP_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS))
+        try:
+            return _ocr_image(crop, rotation=0, config=config, timeout=min(DATE_CROP_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS))
+        except (pytesseract.TesseractError, TimeoutError):
+            return ""
 
 
 def _extract_date_from_crops(image, rotation: int, text: str) -> Optional[datetime]:
@@ -1201,7 +1337,7 @@ def _extract_date_from_crops(image, rotation: int, text: str) -> Optional[dateti
     for crop_box in crops:
         try:
             crop_text = _ocr_date_crop(rotated, crop_box)
-        except Exception:
+        except (pytesseract.TesseractError, TimeoutError):
             continue
         dt = extract_date(crop_text)
         if dt:
@@ -1212,9 +1348,10 @@ def _extract_date_from_crops(image, rotation: int, text: str) -> Optional[dateti
 def _debug_extract_log(payload: Dict[str, str]) -> None:
     if not DEBUG_EXTRACT:
         return
-    DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with DEBUG_LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    with _LOG_LOCK:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
 def _is_ocr_gibberish(value: str) -> bool:
@@ -1265,6 +1402,7 @@ def _truncate_with_hash(value: str, max_len: int) -> str:
 def build_new_filename(
     supplier: str,
     date_obj: Optional[datetime],
+    delivery_note_nr: Optional[str] = None,
     date_format: str = DEFAULT_DATE_FORMAT,
     max_supplier_len: int = 40,
     max_base_len: int = 120,
@@ -1279,7 +1417,16 @@ def build_new_filename(
 
     safe_supplier = sanitize_filename(supplier)
     safe_supplier = _truncate_with_hash(safe_supplier, max_supplier_len)
-    base_name = sanitize_filename(f"{safe_supplier}_{date_part}")
+
+    base_parts = [safe_supplier, date_part]
+    if delivery_note_nr:
+        safe_delivery_nr = sanitize_filename(delivery_note_nr)
+        # Truncate to avoid extremely long parts
+        safe_delivery_nr = _truncate_with_hash(safe_delivery_nr, 30)
+        base_parts.append(safe_delivery_nr)
+
+    base_name = "_".join(base_parts)
+    base_name = sanitize_filename(base_name)  # Sanitize the final combined name
     base_name = _truncate_with_hash(base_name, max_base_len)
     return f"{base_name}.pdf"
 
@@ -1297,11 +1444,12 @@ def get_unique_path(target_dir: Path, filename: str) -> Path:
 
 def _move_pdf_with_name(pdf_path: Path, output_dir: Path, filename: str) -> Tuple[Optional[Path], str]:
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        target_path = get_unique_path(output_dir, filename)
-        pdf_path.replace(target_path)
+        with _FS_LOCK:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            target_path = get_unique_path(output_dir, filename)
+            pdf_path.replace(target_path)
         return target_path, ""
-    except Exception as exc:
+    except OSError as exc:
         return None, f"move_failed: {exc}"
 
 
@@ -1333,6 +1481,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     if render_error:
         result["error"] = render_error
         result["parsing_failed"] = True
+    # Aggressiver: direkt die beste Rotation suchen, damit kopfstehende/gedrehte Seiten erkannt werden
     ocr_result = _ocr_images_best(images, force_best=True) if images else {"text": "", "error": render_error}
     text = ""
     if ocr_result["error"]:
@@ -1357,7 +1506,13 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         supplier_guess_line = ""
         gibberish = True
     textlayer_pages, _ = _extract_textlayer(pdf_path, pages=OCR_PAGES)
-    date_pick = extract_best_date(pdf_path, images=images, textlayer_pages=textlayer_pages, pages=OCR_PAGES)
+    date_pick = extract_best_date(
+        pdf_path,
+        images=images,
+        textlayer_pages=textlayer_pages,
+        pages=OCR_PAGES,
+        known_rotation=rotation_value if result["ocr_rotation"] else None,
+    )
     date_obj = date_pick.get("date")
     date_source = date_pick.get("source", "")
     date_confidence = date_pick.get("confidence", 0.0) or 0.0
@@ -1422,29 +1577,30 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
 
 def _append_log(log_path: Path, row: Dict[str, str]) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    file_exists = log_path.exists()
-    with log_path.open("a", newline="", encoding="utf-8") as handle:
-        log_fields = [
-            "timestamp",
-            "original",
-            "new",
-            "supplier",
-            "date",
-            "date_source",
-            "status",
-            "error",
-            "tesseract_path",
-            "poppler_bin",
-        ]
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=log_fields,
-        )
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
-    _trim_run_log(log_path, log_fields)
+    log_fields = [
+        "timestamp",
+        "original",
+        "new",
+        "supplier",
+        "date",
+        "date_source",
+        "status",
+        "error",
+        "tesseract_path",
+        "poppler_bin",
+    ]
+    with _LOG_LOCK:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_exists = log_path.exists()
+        with log_path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=log_fields,
+            )
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
+        _trim_run_log(log_path, log_fields)
 
 
 def _trim_run_log(log_path: Path, log_fields: List[str]) -> None:
@@ -1481,10 +1637,9 @@ def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT
 
     log_path = BASE_DIR / "data" / "logs" / "run.csv"
 
-    for pdf_path in sorted(input_dir.glob("*.pdf")):
+    def _process_one(pdf_path: Path) -> Dict[str, str]:
         result = process_pdf(pdf_path, output_dir, date_format=date_format)
         result["original"] = pdf_path.name
-        results.append(result)
         _append_log(
             log_path,
             {
@@ -1500,6 +1655,18 @@ def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT
                 "poppler_bin": result.get("poppler_bin", ""),
             },
         )
+        return result
+
+    pdf_files = sorted(input_dir.glob("*.pdf"))
+    max_workers = min(4, os.cpu_count() or 1)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_pdf = {executor.submit(_process_one, p): p for p in pdf_files}
+        for future in concurrent.futures.as_completed(future_to_pdf):
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                _LOGGER.error(f"Error processing {future_to_pdf[future]}: {exc}")
 
     return results
 
@@ -1526,12 +1693,3 @@ if __name__ == "__main__":
 
     if len(sys.argv) > 1:
         _print_date_candidates(sys.argv[1:])
-
-
-
-
-
-
-
-
-
