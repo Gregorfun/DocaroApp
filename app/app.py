@@ -72,6 +72,14 @@ except ImportError:  # pragma: no cover - Windows fallback
 
 DEBUG_MODE = config.DEBUG
 
+ALLOWED_EXTENSIONS = {".pdf"}
+ALLOWED_DATE_FORMATS = [
+    "%Y-%m-%d",  # ISO (YYYY-MM-DD)
+    "%d.%m.%Y",  # Deutsch (TT.MM.JJJJ)
+    "%d.%m.%y",  # Deutsch kurz (TT.MM.JJ)
+    "%m/%d/%Y",  # US (MM/DD/YYYY)
+]
+
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
