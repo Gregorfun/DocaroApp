@@ -286,7 +286,9 @@ def _set_progress(total: int, done: int) -> None:
             "done": int(done),
             "percent": (float(done) / float(total) * 100.0) if total else 0.0,
         }
-        _progress_path().write_text(json.dumps(payload), encoding="utf-8")
+        tmp_path = _progress_path().with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        tmp_path.replace(_progress_path())
     except Exception:
         # Progress-Anzeige darf die Verarbeitung nie brechen.
         pass

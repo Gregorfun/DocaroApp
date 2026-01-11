@@ -25,6 +25,15 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $outLogPath = Join-Path $logDir "flask_stdout.log"
 $errLogPath = Join-Path $logDir "flask_stderr.log"
 
+# Stale-Statusdateien nach Neustart entfernen (sonst bleibt "Verarbeitung läuft" hängen)
+try {
+	$tmpDir = Join-Path $PSScriptRoot "data\tmp"
+	$flagPath = Join-Path $tmpDir "processing.flag"
+	$progressPath = Join-Path $tmpDir "progress.json"
+	if (Test-Path $flagPath) { Remove-Item -Force $flagPath -ErrorAction SilentlyContinue }
+	if (Test-Path $progressPath) { Remove-Item -Force $progressPath -ErrorAction SilentlyContinue }
+} catch {}
+
 # Wenn bereits eine Instanz läuft, beenden (damit neue Änderungen aktiv sind)
 try {
 	$existing = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object {
