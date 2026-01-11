@@ -34,7 +34,7 @@
         <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
           <label class="file-input">
             <span>PDF-Dateien auswählen</span>
-            <input type="file" name="files" accept="application/pdf" multiple />
+            <input type="file" name="files" accept=".pdf,application/pdf" multiple />
           </label>
           <label>
             <span>Datumsformat</span>

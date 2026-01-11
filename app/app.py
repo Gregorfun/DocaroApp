@@ -176,9 +176,19 @@ def upload():
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         TMP_DIR.mkdir(parents=True, exist_ok=True)
 
+        # Robust: unterschiedliche Feldnamen abfangen (Browser/Clients)
         uploaded = request.files.getlist("files")
         if not uploaded:
-            return render_template("index.html", results=[], files=_list_finished())
+            uploaded = request.files.getlist("files[]")
+        if not uploaded:
+            uploaded = request.files.getlist("file")
+
+        # Wenn kein File ausgewählt wurde, liefert Flask teilweise eine Liste mit einem leeren Eintrag.
+        uploaded = [f for f in uploaded if getattr(f, "filename", None)]
+        if not uploaded:
+            logger.info("Upload without files. request.files keys=%s", list(request.files.keys()))
+            flash("Keine PDF-Dateien ausgewählt.")
+            return redirect(url_for("index"))
 
         date_fmt = request.form.get("date_fmt", "").strip()
         if date_fmt not in ALLOWED_DATE_FORMATS:
@@ -186,6 +196,7 @@ def upload():
 
         upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
         upload_dir.mkdir(parents=True, exist_ok=True)
+        saved_count = 0
         for storage in uploaded:
             if not storage or not storage.filename:
                 continue
@@ -194,6 +205,17 @@ def upload():
                 continue
             target_path = get_unique_path(upload_dir, safe_name)
             storage.save(target_path)
+            saved_count += 1
+
+        if saved_count == 0:
+            logger.info(
+                "No valid PDFs saved. uploaded=%s",
+                [getattr(f, "filename", "") for f in uploaded],
+            )
+            flash("Keine gültigen PDF-Dateien gefunden (nur .pdf erlaubt).")
+            return redirect(url_for("index"))
+
+        logger.info("Upload accepted: %s PDFs saved to %s", saved_count, upload_dir)
 
         # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
         _set_processing(True)
