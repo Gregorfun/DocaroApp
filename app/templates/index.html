@@ -6,7 +6,7 @@
     <title>Docaro OCR-Renamer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
-  <body data-edit-all="{% if edit_all %}1{% else %}0{% endif %}">
+  <body data-edit-all="{% if edit_all %}1{% else %}0{% endif %}" data-results-count="{{ results|length if results else 0 }}">
     <main class="container">
       <header>
         <h1>Docaro OCR-Renamer</h1>
@@ -16,6 +16,10 @@
         </p>
         {% if reset_done %}
           <p class="notice">Downloads wurden zurückgesetzt.</p>
+        {% endif %}
+        {% if processing %}
+          <p class="notice">Verarbeitung läuft … Seite aktualisiert sich automatisch.</p>
+          <meta http-equiv="refresh" content="3">
         {% endif %}
         {% with messages = get_flashed_messages() %}
           {% if messages %}
@@ -185,7 +189,9 @@
     </main>
     <script>
       (() => {
-        const editAll = document.querySelector("body")?.dataset?.editAll === "1";
+        const bodyEl = document.querySelector("body");
+        const editAll = bodyEl?.dataset?.editAll === "1";
+        const initialCount = parseInt(bodyEl?.dataset?.resultsCount || "0", 10);
         const detailsItems = document.querySelectorAll("details[data-doc-id]");
         detailsItems.forEach((details) => {
           const docId = details.dataset.docId || "";

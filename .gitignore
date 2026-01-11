@@ -19,6 +19,20 @@ data/tmp/
 data/eingang/
 data/fertig/
 data/uploads/
+data/session_files.json
+data/*.lock
+
+# Incoming scans (local, large)
+Daten eingang/
+daten_eingang/
+daten_fertig/
+
+# Generated reports/diagnostics
+data/logs/*.csv
+data/logs/*.txt
+
+# Local scratch images
+problem.png
 
 # Secrets
 .env

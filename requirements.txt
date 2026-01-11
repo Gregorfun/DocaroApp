@@ -1,5 +1,11 @@
-﻿flask
+flask
 pdf2image
 pytesseract
 pillow
 python-dateutil
+PyPDF2
+pdfplumber
+
+# Optional (KI-OCR Fallback für schwierige Scan-PDFs):
+# paddleocr
+# numpy

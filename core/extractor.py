@@ -8,8 +8,10 @@ import os
 import re
 import shutil
 import shlex
+import subprocess
 import logging
 import threading
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -18,6 +20,7 @@ from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError, PDFSyntaxError
 import pytesseract
 from PIL import ImageEnhance
+from PIL import Image
 
 try:
     import date_parser  # type: ignore
@@ -56,10 +59,174 @@ DATE_CROP_OCR_TIMEOUT = config.DATE_CROP_OCR_TIMEOUT
 OCR_PAGES = config.OCR_PAGES
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 DEBUG_EXTRACT = config.DEBUG_EXTRACT
+USE_PADDLEOCR = getattr(config, "USE_PADDLEOCR", False)
+PADDLEOCR_LANG = getattr(config, "PADDLEOCR_LANG", "german")
 DEBUG_LOG_PATH = config.LOG_DIR / "extract_debug.log"
 _LOGGER = logging.getLogger(__name__)
 _LOG_LOCK = threading.Lock()
 _FS_LOCK = threading.Lock()
+
+_PADDLE_OCR = None
+_PADDLE_LOCK = threading.Lock()
+_PADDLE_RUNTIME_OK: Optional[bool] = None
+
+
+def _paddle_runtime_selftest() -> Tuple[bool, str]:
+    """Checks whether PaddleOCR can be imported/initialized in this environment.
+
+    Motivation: On some Windows setups Paddle/PaddleX can hard-crash the interpreter
+    (access violation). To keep Docaro stable we probe in a subprocess first.
+
+    Returns: (ok, detail)
+    """
+    try:
+        test_code = (
+            "import os\n"
+            "os.environ['DISABLE_MODEL_SOURCE_CHECK']='True'\n"
+            "os.environ.setdefault('OMP_NUM_THREADS','1')\n"
+            "os.environ.setdefault('MKL_NUM_THREADS','1')\n"
+            "from paddleocr import PaddleOCR\n"
+            "import numpy as np\n"
+            "ocr = PaddleOCR(lang=%r, use_angle_cls=True)\n"
+            "arr = np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8)\n"
+            "_ = ocr.ocr(arr)\n"
+            "print('ok')\n" % (PADDLEOCR_LANG,)
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", test_code],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        if completed.returncode == 0 and "ok" in (completed.stdout or ""):
+            return True, "ok"
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return False, f"returncode={completed.returncode} detail={detail[:300]}"
+    except Exception as exc:
+        return False, f"selftest_failed: {exc}"
+
+
+def _get_paddle_ocr():
+    """Lazy-Loader für PaddleOCR.
+
+    Wichtig: PaddleOCR ist optional und wird nur geladen, wenn DOCARO_USE_PADDLEOCR=1.
+    """
+    global _PADDLE_OCR
+    if _PADDLE_OCR is not None:
+        return _PADDLE_OCR
+    with _PADDLE_LOCK:
+        if _PADDLE_OCR is not None:
+            return _PADDLE_OCR
+
+        global _PADDLE_RUNTIME_OK
+        if _PADDLE_RUNTIME_OK is None:
+            ok, detail = _paddle_runtime_selftest()
+            _PADDLE_RUNTIME_OK = ok
+            if not ok:
+                _LOGGER.warning("PaddleOCR self-test failed (disabled): %s", detail)
+
+        if _PADDLE_RUNTIME_OK is False:
+            _PADDLE_OCR = False
+            return _PADDLE_OCR
+
+        # PaddleOCR kann beim ersten Import/Init Checks/Downloads triggern.
+        # Wir setzen das Flag defensiv, damit es in restriktiven Umgebungen nicht hart scheitert.
+        os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+        try:
+            from paddleocr import PaddleOCR  # type: ignore
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            _LOGGER.info("PaddleOCR not available: %s", exc)
+            _PADDLE_OCR = False
+            return _PADDLE_OCR
+
+        try:
+            # use_angle_cls hilft bei 90°/180°/270° Fällen.
+            _PADDLE_OCR = PaddleOCR(lang=PADDLEOCR_LANG, use_angle_cls=True)
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            _LOGGER.warning("PaddleOCR init failed: %s", exc)
+            _PADDLE_OCR = False
+        return _PADDLE_OCR
+
+
+def _paddle_ocr_image(image) -> Tuple[str, float, str]:
+    """OCR via PaddleOCR (optional).
+
+    Returns: (text, avg_confidence, error)
+    """
+    if not USE_PADDLEOCR:
+        return "", 0.0, "disabled"
+    engine = _get_paddle_ocr()
+    if not engine:
+        return "", 0.0, "unavailable"
+
+    try:
+        if not isinstance(image, Image.Image):
+            return "", 0.0, "invalid_image"
+        rgb = image.convert("RGB")
+        import numpy as np  # type: ignore
+
+        arr = np.array(rgb)
+        result = engine.ocr(arr)
+        if not result:
+            return "", 0.0, "no_text"
+
+        lines: List[str] = []
+        confs: List[float] = []
+
+        # PaddleOCR Ergebnisformate variieren zwischen Versionen.
+        # Häufige Formen:
+        #  A) [ [box, (text, conf)], ... ]
+        #  B) [ [ [box, (text, conf)], ... ] ]  (pages)
+        entries: List[object] = []
+        try:
+            if (
+                isinstance(result, list)
+                and result
+                and isinstance(result[0], list)
+                and len(result[0]) == 2
+            ):
+                # Form A
+                entries = result  # type: ignore[assignment]
+            else:
+                # Form B oder andere: flatten
+                for page in result:
+                    if isinstance(page, list):
+                        entries.extend(page)
+        except Exception:
+            entries = []
+
+        for entry in entries:
+            if not entry or not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                continue
+            text_conf = entry[1]
+            if not text_conf or not isinstance(text_conf, (list, tuple)) or len(text_conf) < 2:
+                continue
+            text_val = str(text_conf[0] or "").strip()
+            try:
+                conf_val = float(text_conf[1])
+            except Exception:
+                conf_val = 0.0
+            if text_val:
+                lines.append(text_val)
+                confs.append(conf_val)
+
+        if not lines:
+            return "", 0.0, "no_text"
+
+        text = "\n".join(lines)
+        avg_conf = sum(confs) / len(confs) if confs else 0.0
+        return text, avg_conf, ""
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return "", 0.0, f"paddle_failed: {exc}"
 
 
 def _has_pdfinfo(bin_dir: Path) -> bool:
@@ -312,8 +479,16 @@ def _count_keywords(text: str) -> int:
 
 
 def _score_text(text: str) -> int:
+    if not text:
+        return 0
+    lower = text.lower()
+    words = len(text.split())
     alnum_count = sum(1 for ch in text if ch.isalnum())
-    return alnum_count + _count_keywords(text)
+    keyword_hits = _count_keywords(text)
+    label_hits = sum(1 for _, pattern in LABEL_PATTERNS if pattern.search(lower))
+    date_hits = _count_date_hits(text)
+    # Gewichte so, dass „echter“ Lieferschein-Text klar gewinnt gegenüber OCR-Gibberish.
+    return (words * 2) + (alnum_count // 25) + (keyword_hits * 60) + (label_hits * 80) + (date_hits * 180)
 
 
 def _count_date_hits(text: str) -> int:
@@ -487,7 +662,7 @@ def _detect_osd_rotation(image) -> Optional[int]:
         return None
     try:
         osd = pytesseract.image_to_osd(image, timeout=min(ROTATION_OCR_TIMEOUT, OCR_TIMEOUT_SECONDS))
-    except (pytesseract.TesseractError, TimeoutError):
+    except (pytesseract.TesseractError, TimeoutError, RuntimeError):
         return None
     match = re.search(r"Rotate:\s*(\d+)", osd)
     if not match:
@@ -544,31 +719,32 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
 
     rotation_reason = "low_text" if text_length < 200 else "no_keywords"
     osd_rotation = _detect_osd_rotation(image)
-    if osd_rotation is not None:
-        if osd_rotation == 0:
-            return {
-                "text": text,
-                "error": "",
-                "rotation": "0",
-                "rotation_reason": "osd",
-                "score": str(base_score),
-            }
+    if osd_rotation is not None and osd_rotation != 0:
+        # Validiere OSD: Prüfe, ob OSD-Rotation wirklich besser ist
         try:
             rotated_text = _ocr_image(image, rotation=osd_rotation)
+            osd_score = _score_text(rotated_text)
+            # OSD wird nur akzeptiert, wenn es mindestens 1.1x besseren Score hat
+            if osd_score > base_score * 1.1:
+                _LOGGER.info("osd_rotation accepted: %s (base=%d, osd=%d)", osd_rotation, base_score, osd_score)
+                return {
+                    "text": rotated_text,
+                    "error": "",
+                    "rotation": str(osd_rotation),
+                    "rotation_reason": "osd",
+                    "score": str(osd_score),
+                }
+            else:
+                # OSD rotation ist nicht besser; bleib bei 0°
+                _LOGGER.info("osd_rotation rejected: %s (base=%d, osd=%d, need >%.0f)", 
+                            osd_rotation, base_score, osd_score, base_score * 1.1)
         except (pytesseract.TesseractError, TimeoutError) as exc:
-            return {"text": "", "error": f"ocr_failed: {exc}"}
-        score = _score_text(rotated_text)
-        return {
-            "text": rotated_text,
-            "error": "",
-            "rotation": str(osd_rotation),
-            "rotation_reason": "osd",
-            "score": str(score),
-        }
+            _LOGGER.info("osd_rotation failed: %s -> %s", osd_rotation, exc)
 
-    best_rotation = 0
+    # OSD nicht hilfreich oder nicht gesetzt; versuche Fallback Rotationen
     best_text = text
     best_score = base_score
+    best_rotation = 0
     candidates = _rotation_candidates_from_crops(image)
     for rotation, _ in candidates:
         if rotation == 0:
@@ -992,8 +1168,35 @@ def _select_best_candidate(candidates: List[Dict[str, object]]) -> Optional[Dict
 
 
 def _extract_date_from_filename(filename: str) -> Optional[Dict[str, object]]:
+    # Fallback 1: OCR/Regex-basiert (bestehend)
     candidates = _extract_candidates_from_lines([filename], "filename_fallback", 0.40)
-    return _select_best_candidate(candidates)
+    best = _select_best_candidate(candidates)
+    if best:
+        return best
+
+    # Fallback 2: Scan-Pattern wie scan_20251127071452.pdf (YYYYMMDDHHMMSS) -> 2025-11-27
+    match = re.search(r"scan_(20\d{2})(\d{2})(\d{2})", filename, flags=re.IGNORECASE)
+    if not match:
+        # Allgemeiner Fallback: erste YYYYMMDD-Sequenz im Namen (auch wenn danach weitere Ziffern folgen)
+        match = re.search(r"(20\d{2})(\d{2})(\d{2})", filename)
+    if not match:
+        return None
+    try:
+        year, month, day = (int(part) for part in match.groups())
+    except ValueError:
+        return None
+    date_obj = _build_date(year, month, day)
+    if not date_obj:
+        return None
+    return {
+        "date": date_obj,
+        "raw": match.group(0),
+        "label": "filename_scan",
+        "priority": LABEL_PRIORITY.get("generic", 99),
+        "confidence": 0.35,
+        "evidence": filename,
+        "source": "filename_scan",
+    }
 
 
 def extract_best_date(
@@ -1044,35 +1247,64 @@ def extract_best_date(
             images = []
 
     if images:
-        candidates_log: List[Tuple[int, int, int]] = []
-        best_score = -1
-        best_rotation = 0
+        # Strategie: Nur Rotation 0° testen; andere Rotationen NUR als Fallback wenn nichts gefunden
         best_image = images[0]
-
-        rotations = (0, 90, 180, 270)
-        # Wenn eine Rotation bekannt ist, zuerst diese testen, dann die übrigen als Fallback
-        if known_rotation is not None:
-            base = (0, 90, 180, 270)
-            rotations = (known_rotation,) + tuple(r for r in base if r != known_rotation)
-
-        for page_idx, image in enumerate(images, start=1):
-            for rotation in rotations:
-                texts = _ocr_rois(image, rotation, ["roi1", "roi2", "roi3"])
-                combined = " ".join(texts)
-                score = _score_rotation_text(combined)
-                candidates_log.append((page_idx, rotation, score))
-                if score > best_score:
-                    best_score = score
-                    best_rotation = rotation
-                    best_image = image
-        candidates_log.sort(key=lambda item: item[2], reverse=True)
-        _LOGGER.info(
-            "date rotation selected=%s candidates=%s",
-            best_rotation,
-            candidates_log[:4],
-        )
-        final_texts = _ocr_rois(best_image, best_rotation, ["roi1", "roi2", "roi3"])
-        combined_text = "\n".join(final_texts)
+        best_rotation = known_rotation if known_rotation is not None else 0
+        
+        # Erste Rotation (normalerweise 0° oder bekannte Rotation)
+        first_texts = _ocr_rois(best_image, best_rotation, ["roi1", "roi2"])
+        combined_text = "\n".join(first_texts)
+        first_score = _score_rotation_text(combined_text)
+        
+        # Prüfe ob erste Rotation bereits gute Ergebnisse liefert
+        has_date_hints = _count_date_hits(combined_text) > 0
+        has_good_score = first_score > 100
+        
+        # Rotation-Fallback NUR wenn erste Rotation unzureichend
+        if not has_date_hints or not has_good_score:
+            _LOGGER.info("date rotation fallback: roi score=%d, date_hits=%d; trying full-page ocr at 0°", 
+                        first_score, _count_date_hits(combined_text))
+            # Versuche erst Full-Page OCR bei 0° (kann better sein als ROI)
+            try:
+                full_ocr_text = _ocr_image(best_image, best_rotation, timeout=OCR_TIMEOUT_SECONDS)
+                full_score = _score_rotation_text(full_ocr_text)
+                if _count_date_hits(full_ocr_text) > 0 or full_score > 150:
+                    _LOGGER.info("date rotation: full-page OCR at 0° found dates or high score (%d)", full_score)
+                    combined_text = full_ocr_text
+                    has_date_hints = True
+                    has_good_score = True
+            except (pytesseract.TesseractError, TimeoutError):
+                pass
+        
+        # Falls IMMER NOCH keine Daten: Versuche Fallback-Rotationen
+        if not has_date_hints or not has_good_score:
+            _LOGGER.info("date rotation: still no success; trying 90° and 180°")
+            candidates_log: List[Tuple[int, int, int]] = [(1, 0, first_score)]
+            best_score = first_score
+            
+            # 90/180/270 als Fallback testen (90° kann in beide Richtungen auftreten)
+            fallback_rotations = [90, 180, 270]
+            for rotation in fallback_rotations:
+                try:
+                    texts = _ocr_rois(best_image, rotation, ["roi1", "roi2"])
+                    full = " ".join(texts)
+                    score = _score_rotation_text(full)
+                    candidates_log.append((1, rotation, score))
+                    if score > best_score:
+                        best_score = score
+                        best_rotation = rotation
+                        combined_text = full
+                        if _count_date_hits(full) > 0:
+                            has_date_hints = True
+                except (pytesseract.TesseractError, TimeoutError):
+                    pass
+            
+            if best_rotation != 0:
+                _LOGGER.info("date rotation selected=%d from %s", best_rotation, candidates_log)
+        else:
+            _LOGGER.info("date rotation 0° sufficient (first_score=%d)", first_score)
+        
+        final_texts = combined_text.splitlines() if isinstance(combined_text, str) else [combined_text]
         if date_parser:
             dp_iso, dp_reason = date_parser.extract_date_from_text(combined_text)
             if dp_iso:
@@ -1089,7 +1321,7 @@ def extract_best_date(
                     }
                 except ValueError:
                     pass
-        candidates = _extract_candidates_from_lines(combined_text.splitlines(), "ocr", 0.70)
+        candidates = _extract_candidates_from_lines(final_texts, "ocr", 0.70)
         best = _select_best_candidate(candidates)
         if best:
             _LOGGER.info(
@@ -1209,7 +1441,9 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
     top_lines = lines[:40]
     blocked_terms = [
         "datum der uebergabe",
+        "datum der uebernahme",
         "uebergabe",
+        "uebernahme",
         "kommissionierliste",
         "lieferadresse",
         "rechnungsadresse",
@@ -1257,9 +1491,17 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
         normalized_line = _normalize_supplier_text(line)
         if not normalized_line or any(term in normalized_line for term in blocked_terms):
             continue
+        tokens = set(normalized_line.split())
         score = 0.0
-        if any(marker in normalized_line for marker in endings):
-            score += 0.9
+        # Endungen nur als ganze Wörter werten ("ag" soll nicht in "tag" matchen).
+        for marker in endings:
+            if " " in marker:
+                if marker in normalized_line:
+                    score += 0.9
+                    break
+            elif marker in tokens:
+                score += 0.9
+                break
         if any(marker in normalized_line for marker in contact_markers):
             score += 0.4
         if any(marker in normalized_line for marker in address_markers):
@@ -1477,27 +1719,129 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "parsing_failed": False,
     }
 
-    images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
-    if render_error:
-        result["error"] = render_error
-        result["parsing_failed"] = True
-    # Aggressiver: direkt die beste Rotation suchen, damit kopfstehende/gedrehte Seiten erkannt werden
-    ocr_result = _ocr_images_best(images, force_best=True) if images else {"text": "", "error": render_error}
-    text = ""
-    if ocr_result["error"]:
-        if not result["error"]:
-            result["error"] = ocr_result["error"]
-        result["parsing_failed"] = True
-    else:
-        text = ocr_result["text"]
-    result["ocr_rotation"] = ocr_result.get("rotation", "")
-    result["ocr_rotation_reason"] = ocr_result.get("rotation_reason", "")
-    result["rotate_hint"] = result["ocr_rotation"]
-    try:
-        rotation_value = int(result["ocr_rotation"] or 0)
-    except ValueError:
-        rotation_value = 0
-    supplier, supplier_confidence, supplier_source, supplier_guess_line = detect_supplier(text)
+    # 1) Zuerst Text-Layer versuchen (deutlich schneller als OCR)
+    textlayer_pages, textlayer_err = _extract_textlayer(pdf_path, pages=OCR_PAGES)
+    textlayer_text = "\n".join(textlayer_pages) if textlayer_pages else ""
+
+    supplier = ""
+    supplier_confidence = 0.0
+    supplier_source = "none"
+    supplier_guess_line = ""
+
+    # Wenn Textlayer vorhanden, verwende ihn zur Lieferantenerkennung
+    if textlayer_text.strip():
+        s, c, src, guess = detect_supplier(textlayer_text)
+        supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
+
+    # 2) Datum über Textlayer versuchen; OCR nur wenn nötig
+    date_pick = extract_best_date(
+        pdf_path,
+        images=None,
+        textlayer_pages=textlayer_pages,
+        pages=OCR_PAGES,
+        known_rotation=None,
+    )
+    date_obj = date_pick.get("date")
+    date_source = date_pick.get("source", "")
+    date_confidence = date_pick.get("confidence", 0.0) or 0.0
+    date_evidence = date_pick.get("evidence", "") or ""
+
+    # Early-Exit: Wenn Textlayer ausreichende Konfidenz liefert, überspringe OCR komplett
+    skip_ocr = (
+        date_obj and date_confidence >= 0.80 and
+        supplier and supplier != "Unbekannt" and supplier_confidence >= 0.80
+    )
+
+    # 3) Falls Textlayer nicht aussagekräftig: OCR als Fallback durchführen
+    rotation_value = 0
+    if not skip_ocr and ((not textlayer_text.strip()) or (not date_obj)):
+        images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
+        if render_error and not textlayer_err:
+            # Nur melden, wenn nicht bereits textlayer Fehler
+            result["error"] = render_error
+            result["parsing_failed"] = True
+        
+        # VEREINFACHT: Kein force_best mehr - normale Rotation mit Fallback
+        ocr_result = _ocr_images_best(images or [], force_best=False) if images else {"text": "", "error": render_error or ""}
+        ocr_text = ""
+        if not ocr_result.get("error"):
+            ocr_text = ocr_result.get("text", "")
+            # Lieferantenerkennung per OCR nur falls vorher unbekannt oder geringe Konfidenz
+            if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.5:
+                s, c, src, guess = detect_supplier(ocr_text)
+                supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
+        result["ocr_rotation"] = ocr_result.get("rotation", "")
+        result["ocr_rotation_reason"] = ocr_result.get("rotation_reason", "")
+        result["rotate_hint"] = result["ocr_rotation"]
+        try:
+            rotation_value = int(result["ocr_rotation"] or 0)
+        except ValueError:
+            rotation_value = 0
+        
+        # Datum-Extraktion nur EINMAL mit OCR (nicht doppelt!)
+        if not date_obj:
+            # Nutze bereits gescannten OCR-Text statt erneut ROI-Scans
+            if ocr_text:
+                if date_parser:
+                    dp_iso, dp_reason = date_parser.extract_date_from_text(ocr_text)
+                    if dp_iso:
+                        try:
+                            date_obj = datetime.strptime(dp_iso, "%Y-%m-%d")
+                            date_source = "ocr_smart"
+                            date_confidence = 0.85
+                            date_evidence = dp_reason
+                        except ValueError:
+                            pass
+                
+                # Fallback auf Regex wenn Parser nichts fand
+                if not date_obj:
+                    candidates = _extract_candidates_from_lines(ocr_text.splitlines(), "ocr", 0.70)
+                    best_candidate = _select_best_candidate(candidates)
+                    if best_candidate:
+                        date_obj = best_candidate.get("date")
+                        date_source = best_candidate.get("source", "ocr")
+                        date_confidence = best_candidate.get("confidence", 0.70) or 0.70
+                        date_evidence = best_candidate.get("evidence", "") or ""
+
+        # Optional: KI-OCR Fallback (PaddleOCR) nur wenn weiterhin unsicher
+        need_paddle = (
+            (not date_obj or date_confidence < 0.75)
+            or (not supplier or supplier == "Unbekannt" or supplier_confidence < 0.70)
+        )
+        if need_paddle and images and USE_PADDLEOCR:
+            try:
+                paddle_text, paddle_conf, paddle_err = _paddle_ocr_image(images[0])
+                if paddle_text and not paddle_err:
+                    # Lieferant: nur überschreiben, wenn wir dadurch besser werden
+                    if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.70:
+                        s2, c2, src2, guess2 = detect_supplier(paddle_text)
+                        if s2 and s2 != "Unbekannt" and c2 >= supplier_confidence:
+                            supplier, supplier_confidence, supplier_source, supplier_guess_line = s2, c2, "paddle", guess2
+
+                    # Datum: nur überschreiben, wenn wir dadurch besser werden
+                    if (not date_obj) or (date_confidence < 0.75):
+                        if date_parser:
+                            dp_iso, dp_reason = date_parser.extract_date_from_text(paddle_text)
+                            if dp_iso:
+                                try:
+                                    date_obj = datetime.strptime(dp_iso, "%Y-%m-%d")
+                                    date_source = "paddle_smart"
+                                    date_confidence = max(date_confidence, 0.88)
+                                    date_evidence = dp_reason
+                                except ValueError:
+                                    pass
+                        if not date_obj:
+                            candidates = _extract_candidates_from_lines(paddle_text.splitlines(), "paddle", 0.72)
+                            best_candidate = _select_best_candidate(candidates)
+                            if best_candidate:
+                                date_obj = best_candidate.get("date")
+                                date_source = best_candidate.get("source", "paddle")
+                                date_confidence = max(date_confidence, float(best_candidate.get("confidence", 0.72) or 0.72))
+                                date_evidence = best_candidate.get("evidence", "") or ""
+                elif paddle_err and paddle_err not in ("disabled", "unavailable"):
+                    _LOGGER.info("PaddleOCR error: %s", paddle_err)
+            except Exception as exc:
+                _LOGGER.info("PaddleOCR fallback failed: %s", exc)
     gibberish = False
     if supplier_source == "heuristic" and _is_ocr_gibberish(supplier_guess_line or supplier):
         supplier = "Unbekannt"
@@ -1505,18 +1849,6 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         supplier_source = "none"
         supplier_guess_line = ""
         gibberish = True
-    textlayer_pages, _ = _extract_textlayer(pdf_path, pages=OCR_PAGES)
-    date_pick = extract_best_date(
-        pdf_path,
-        images=images,
-        textlayer_pages=textlayer_pages,
-        pages=OCR_PAGES,
-        known_rotation=rotation_value if result["ocr_rotation"] else None,
-    )
-    date_obj = date_pick.get("date")
-    date_source = date_pick.get("source", "")
-    date_confidence = date_pick.get("confidence", 0.0) or 0.0
-    date_evidence = date_pick.get("evidence", "") or ""
     result["supplier"] = supplier
     result["supplier_confidence"] = f"{supplier_confidence:.2f}" if supplier_confidence else ""
     result["supplier_source"] = supplier_source
@@ -1658,7 +1990,8 @@ def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT
         return result
 
     pdf_files = sorted(input_dir.glob("*.pdf"))
-    max_workers = min(4, os.cpu_count() or 1)
+    # Reduziere Parallelität auf 1 Worker für stabilere Performance
+    max_workers = 1
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_pdf = {executor.submit(_process_one, p): p for p in pdf_files}

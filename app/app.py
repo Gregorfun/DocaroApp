@@ -29,9 +29,11 @@ from flask import (
     send_from_directory,
     session,
     url_for,
+    has_request_context,
 )
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
+import threading
 
 APP_DIR = Path(__file__).resolve().parent
 BASE_DIR = APP_DIR.parent
@@ -81,7 +83,8 @@ ALLOWED_DATE_FORMATS = [
 ]
 
 app = Flask(__name__)
-app.secret_key = config.SECRET_KEY
+# Fallback Secret Key, falls nicht gesetzt, damit Sessions zuverlässig funktionieren
+app.secret_key = config.SECRET_KEY or secrets.token_hex(16)
 
 # Zentrales Logging einrichten
 logger = config.setup_logging()
@@ -138,6 +141,7 @@ def index():
     incomplete_only = request.args.get("incomplete") == "1"
     edit_all = request.args.get("edit") == "1"
     filtered = _filter_results(results, incomplete_only) if results else results
+    processing = _is_processing()
     return render_template(
         "index.html",
         results=filtered,
@@ -145,7 +149,22 @@ def index():
         reset_done=reset_done,
         incomplete_only=incomplete_only,
         edit_all=edit_all,
+        processing=processing,
     )
+
+
+@app.get("/status.json")
+def status_json():
+    try:
+        return jsonify({
+            "ok": True,
+            "processing": _is_processing(),
+            "files": _list_finished(),
+            "results_count": len(_load_last_results() or []),
+        })
+    except Exception as exc:
+        _log_exception("status:handler", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.post("/upload")
@@ -173,12 +192,14 @@ def upload():
             target_path = get_unique_path(upload_dir, safe_name)
             storage.save(target_path)
 
-        results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt)
-        _clear_pdfs(upload_dir)
-        results = _attach_file_ids(results)
-        results = _apply_result_flags(results)
-        _save_last_results(results)
-        return render_template("index.html", results=results, files=_list_finished(), reset_done=False)
+        # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
+        _set_processing(True)
+        threading.Thread(
+            target=_background_process_upload,
+            args=(upload_dir, date_fmt),
+            daemon=True,
+        ).start()
+        return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("upload:handler", exc)
         raise
@@ -214,20 +235,58 @@ def _get_session_id() -> str:
 
 
 def _session_results_path() -> Path:
-    sid = _get_session_id()
-    return TMP_DIR / f"last_results_{sid}.json"
+    # Verwende globale Ergebnisdatei, um Session-Mismatches zu vermeiden
+    return TMP_DIR / "last_results.json"
+
+def _processing_flag_path() -> Path:
+    # Verwende globale Flag-Datei, damit der Index unabhänging von der Session greift
+    return TMP_DIR / "processing.flag"
+
+def _set_processing(value: bool) -> None:
+    try:
+        if value:
+            _processing_flag_path().write_text("1", encoding="utf-8")
+        else:
+            path = _processing_flag_path()
+            if path.exists():
+                path.unlink()
+    except OSError:
+        pass
+
+def _is_processing() -> bool:
+    try:
+        return _processing_flag_path().exists()
+    except OSError:
+        return False
+
+def _background_process_upload(upload_dir: Path, date_fmt: str) -> None:
+    try:
+        results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt)
+        _clear_pdfs(upload_dir)
+        # WICHTIG: Keine Session-Zugriffe im Hintergrund-Thread!
+        # IDs und Session-Mapping werden in der Index-Route gesetzt.
+        results = _apply_result_flags(results)
+        _save_last_results(results)
+    except Exception as exc:
+        _log_exception("upload:bg_worker", exc)
+    finally:
+        # Hintergrund-Flag entfernen
+        try:
+            flag = _processing_flag_path()
+            if flag.exists():
+                flag.unlink()
+        except OSError:
+            pass
 
 
 def _save_last_results(results) -> None:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
-    session["last_results"] = results
+    # Nur noch Datei schreiben, keine Session mehr
     _session_results_path().write_text(json.dumps(results, indent=2), encoding="utf-8")
 
 
 def _load_last_results():
-    results = session.get("last_results")
-    if results is not None:
-        return _apply_supplier_corrections(results)
+    # Nur noch aus Datei lesen, Session ignorieren
     results_path = _session_results_path()
     if not results_path.exists():
         return None
@@ -235,9 +294,7 @@ def _load_last_results():
         results = json.loads(results_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
-    results = _apply_supplier_corrections(results)
-    session["last_results"] = results
-    return results
+    return _apply_supplier_corrections(results)
 
 
 def _load_session_files() -> dict:
@@ -443,11 +500,16 @@ def reset_downloads():
                 continue
     _remove_session_files()
     results_path = _session_results_path()
-    session.pop("last_results", None)
-    session.pop("sid", None)
     if results_path.exists():
         try:
             results_path.unlink()
+        except OSError:
+            pass
+    # Processing-Flag auch löschen
+    proc_flag = _processing_flag_path()
+    if proc_flag.exists():
+        try:
+            proc_flag.unlink()
         except OSError:
             pass
     return redirect(url_for("index", reset="1"))
@@ -1366,4 +1428,10 @@ def download_all():
 
 if __name__ == "__main__":
     # Start from repo root with: python app/app.py
-    app.run(debug=DEBUG_MODE, use_reloader=False)
+    app.run(
+        host=config.SERVER_HOST,
+        port=config.SERVER_PORT,
+        debug=DEBUG_MODE,
+        use_reloader=config.SERVER_USE_RELOADER,
+        threaded=True,
+    )
