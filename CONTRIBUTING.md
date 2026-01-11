@@ -38,13 +38,7 @@ cp .env.example .env
 # .env bearbeiten und anpassen
 ```
 
-### 5. Konfiguration prüfen
-
-```bash
-python check_config.py
-```
-
-### 6. Entwicklungsserver starten
+### 5. Entwicklungsserver starten
 
 ```bash
 python app/app.py
@@ -67,7 +61,7 @@ Docaro/
 ├── constants.py           # Konstanten (Regex-Patterns, etc.)
 ├── date_parser.py         # Spezielle Datumsparser-Logik
 ├── utils.py               # Hilfsfunktionen
-└── check_config.py        # Konfigurations-Validator
+└── requirements.txt       # Python-Abhängigkeiten
 ```
 
 ## Coding-Standards
@@ -112,7 +106,7 @@ def extract_date(text: str, format_hint: str = "") -> Optional[datetime]:
 
 3. **Tests ausführen**
    ```bash
-   python -m pytest core/test_extractor.py -v
+    python -m unittest core.test_extractor
    python tools/test_extract_date.py
    ```
 

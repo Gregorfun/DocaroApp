@@ -8,15 +8,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 ## [Unreleased]
 
 ### Hinzugefügt
-- README.md mit umfassender Projektdokumentation
+- README.md (Setup/ENV/Tools)
 - .env.example Vorlage für Umgebungsvariablen
 - CONTRIBUTING.md Entwicklerhandbuch
-- check_config.py zur Validierung der Konfiguration
-- setup.py für automatische Installation
+- SECURITY.md Sicherheitshinweise
 - requirements-dev.txt für Entwicklungs-Abhängigkeiten
-- Makefile mit häufigen Entwicklungsaufgaben
 - GitHub Actions CI-Workflow für automatische Tests
-- Config.validate() Methode zur Konfigurationsvalidierung
 
 ### Behoben
 - MANUAL_DATE_FORMATS Konstante war nicht definiert (Bug)
@@ -24,7 +21,6 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Fehlende Dokumentation für Entwickler
 
 ### Verbessert
-- Konfiguration mit besserer Validierung und Fehlermeldungen
 - Bessere Strukturierung der Projektdateien
 - Erweiterte Dokumentation für Installation und Verwendung
 
