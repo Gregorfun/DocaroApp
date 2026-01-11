@@ -266,6 +266,14 @@ td {
   font-weight: 600;
 }
 
+.notice progress {
+  width: 240px;
+  height: 12px;
+  margin: 0 10px;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+
 .status-ok {
   color: #1f5f35;
   font-weight: 600;

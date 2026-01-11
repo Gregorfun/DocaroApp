@@ -7,6 +7,11 @@
 $env:DOCARO_TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
 $env:TESSDATA_PREFIX = "C:\Program Files\Tesseract-OCR\tessdata"
 
+# Konsistente Umlaute im Terminal
+try {
+	[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
+
 # Optional: Debug-Modi aktivieren (auskommentieren bei Bedarf)
 # $env:DOCARO_DEBUG = "1"
 # $env:DOCARO_DEBUG_EXTRACT = "1"
@@ -19,6 +24,17 @@ $logDir = Join-Path $PSScriptRoot "data\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $outLogPath = Join-Path $logDir "flask_stdout.log"
 $errLogPath = Join-Path $logDir "flask_stderr.log"
+
+# Wenn bereits eine Instanz läuft, beenden (damit neue Änderungen aktiv sind)
+try {
+	$existing = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object {
+		$_.CommandLine -and ($_.CommandLine -like '*\\app\\app.py*') -and ($_.CommandLine -like '*\\Docaro\\*')
+	}
+	foreach ($p in $existing) {
+		Write-Host "Stoppe laufende Docaro-Instanz (PID $($p.ProcessId))..." -ForegroundColor Yellow
+		Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+	}
+} catch {}
 
 # Starte Flask-App mit Python aus der venv (detach)
 Start-Process -FilePath (Join-Path $PSScriptRoot ".venv\Scripts\python.exe") `
