@@ -10,6 +10,7 @@ $env:TESSDATA_PREFIX = "C:\Program Files\Tesseract-OCR\tessdata"
 # Konsistente Umlaute im Terminal
 try {
 	[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+	$OutputEncoding = [Console]::OutputEncoding
 } catch {}
 
 # Optional: Debug-Modi aktivieren (auskommentieren bei Bedarf)
@@ -35,9 +36,21 @@ try {
 } catch {}
 
 # Wenn bereits eine Instanz läuft, beenden (damit neue Änderungen aktiv sind)
+# 1) Alles beenden, was auf Port 5001 lauscht
+try {
+	$listeners = Get-NetTCPConnection -LocalPort 5001 -State Listen -ErrorAction SilentlyContinue
+	foreach ($l in $listeners) {
+		if ($l.OwningProcess) {
+			Write-Host "Stoppe Prozess auf Port 5001 (PID $($l.OwningProcess))..." -ForegroundColor Yellow
+			Stop-Process -Id $l.OwningProcess -Force -ErrorAction SilentlyContinue
+		}
+	}
+} catch {}
+
+# 2) Zusätzlich: laufende python.exe mit app\app.py beenden
 try {
 	$existing = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object {
-		$_.CommandLine -and ($_.CommandLine -like '*\\app\\app.py*') -and ($_.CommandLine -like '*\\Docaro\\*')
+		$_.CommandLine -and ($_.CommandLine -like '*\\app\\app.py*')
 	}
 	foreach ($p in $existing) {
 		Write-Host "Stoppe laufende Docaro-Instanz (PID $($p.ProcessId))..." -ForegroundColor Yellow
