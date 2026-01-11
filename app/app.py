@@ -82,6 +82,9 @@ ALLOWED_DATE_FORMATS = [
     "%m/%d/%Y",  # US (MM/DD/YYYY)
 ]
 
+# Date formats accepted for manual input (same as ALLOWED_DATE_FORMATS)
+MANUAL_DATE_FORMATS = ALLOWED_DATE_FORMATS
+
 app = Flask(__name__)
 # Fallback Secret Key, falls nicht gesetzt, damit Sessions zuverlässig funktionieren
 app.secret_key = config.SECRET_KEY or secrets.token_hex(16)

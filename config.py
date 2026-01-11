@@ -32,6 +32,8 @@ class Config:
     PADDLEOCR_LANG = os.getenv("DOCARO_PADDLEOCR_LANG", "german")
     TESSERACT_CMD = os.getenv("DOCARO_TESSERACT_CMD")
     POPPLER_BIN = os.getenv("DOCARO_POPPLER_BIN")
+    # Optional: rekursive Dateisuche (langsamer, findet aber mehr Dateien)
+    DEEP_SCAN = os.getenv("DOCARO_DEEP_SCAN", "0") == "1"
     # Server-Einstellungen
     SERVER_HOST = os.getenv("DOCARO_SERVER_HOST", "127.0.0.1")
     SERVER_PORT = int(os.getenv("DOCARO_SERVER_PORT", "5001"))
