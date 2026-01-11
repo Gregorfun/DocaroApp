@@ -145,6 +145,7 @@ def index():
     edit_all = request.args.get("edit") == "1"
     filtered = _filter_results(results, incomplete_only) if results else results
     processing = _is_processing()
+    progress = _load_progress()
     return render_template(
         "index.html",
         results=filtered,
@@ -153,17 +154,20 @@ def index():
         incomplete_only=incomplete_only,
         edit_all=edit_all,
         processing=processing,
+        progress=progress,
     )
 
 
 @app.get("/status.json")
 def status_json():
     try:
+        progress = _load_progress()
         return jsonify({
             "ok": True,
             "processing": _is_processing(),
             "files": _list_finished(),
             "results_count": len(_load_last_results() or []),
+            "progress": progress,
         })
     except Exception as exc:
         _log_exception("status:handler", exc)
@@ -217,6 +221,8 @@ def upload():
 
         logger.info("Upload accepted: %s PDFs saved to %s", saved_count, upload_dir)
 
+        _set_progress(total=saved_count, done=0)
+
         # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
         _set_processing(True)
         threading.Thread(
@@ -267,6 +273,43 @@ def _processing_flag_path() -> Path:
     # Verwende globale Flag-Datei, damit der Index unabhänging von der Session greift
     return TMP_DIR / "processing.flag"
 
+
+def _progress_path() -> Path:
+    return TMP_DIR / "progress.json"
+
+
+def _set_progress(total: int, done: int) -> None:
+    try:
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "total": int(total),
+            "done": int(done),
+            "percent": (float(done) / float(total) * 100.0) if total else 0.0,
+        }
+        _progress_path().write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        # Progress-Anzeige darf die Verarbeitung nie brechen.
+        pass
+
+
+def _clear_progress() -> None:
+    try:
+        path = _progress_path()
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _load_progress() -> Optional[dict]:
+    path = _progress_path()
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
 def _set_processing(value: bool) -> None:
     try:
         if value:
@@ -286,7 +329,10 @@ def _is_processing() -> bool:
 
 def _background_process_upload(upload_dir: Path, date_fmt: str) -> None:
     try:
-        results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt)
+        def _progress_cb(done: int, total: int, filename: str) -> None:
+            _set_progress(total=total, done=done)
+
+        results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt, progress_callback=_progress_cb)
         _clear_pdfs(upload_dir)
         # WICHTIG: Keine Session-Zugriffe im Hintergrund-Thread!
         # IDs und Session-Mapping werden in der Index-Route gesetzt.
@@ -302,6 +348,7 @@ def _background_process_upload(upload_dir: Path, date_fmt: str) -> None:
                 flag.unlink()
         except OSError:
             pass
+        _clear_progress()
 
 
 def _save_last_results(results) -> None:

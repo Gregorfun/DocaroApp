@@ -18,7 +18,13 @@
           <p class="notice">Downloads wurden zurückgesetzt.</p>
         {% endif %}
         {% if processing %}
-          <p class="notice">Verarbeitung läuft … Seite aktualisiert sich automatisch.</p>
+          <p class="notice">
+            Verarbeitung läuft …
+            {% if progress and progress.total is not none %}
+              ({{ progress.done }}/{{ progress.total }})
+            {% endif %}
+            Seite aktualisiert sich automatisch.
+          </p>
           <meta http-equiv="refresh" content="3">
         {% endif %}
         {% with messages = get_flashed_messages() %}

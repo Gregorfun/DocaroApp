@@ -14,7 +14,7 @@ import threading
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError, PDFSyntaxError
@@ -1962,7 +1962,12 @@ def _trim_run_log(log_path: Path, log_fields: List[str]) -> None:
             writer.writerow(row)
 
 
-def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT_DATE_FORMAT) -> List[Dict[str, str]]:
+def process_folder(
+    input_dir: Path,
+    output_dir: Path,
+    date_format: str = DEFAULT_DATE_FORMAT,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     if not input_dir.exists():
         return results
@@ -1990,16 +1995,32 @@ def process_folder(input_dir: Path, output_dir: Path, date_format: str = DEFAULT
         return result
 
     pdf_files = sorted(input_dir.glob("*.pdf"))
+    total = len(pdf_files)
     # Reduziere Parallelität auf 1 Worker für stabilere Performance
     max_workers = 1
+
+    done = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_pdf = {executor.submit(_process_one, p): p for p in pdf_files}
         for future in concurrent.futures.as_completed(future_to_pdf):
+            pdf_path = future_to_pdf[future]
             try:
                 results.append(future.result())
+                done += 1
+                if progress_callback is not None:
+                    try:
+                        progress_callback(done, total, pdf_path.name)
+                    except Exception:
+                        pass
             except Exception as exc:
-                _LOGGER.error(f"Error processing {future_to_pdf[future]}: {exc}")
+                _LOGGER.error(f"Error processing {pdf_path}: {exc}")
+                done += 1
+                if progress_callback is not None:
+                    try:
+                        progress_callback(done, total, pdf_path.name)
+                    except Exception:
+                        pass
 
     return results
 
