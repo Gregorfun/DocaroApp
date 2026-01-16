@@ -1205,6 +1205,8 @@ def extract_best_date(
     textlayer_pages: Optional[List[str]] = None,
     pages: int = OCR_PAGES,
     known_rotation: Optional[int] = None,
+    allow_ocr: bool = True,
+    allow_filename_fallback: bool = True,
 ) -> Dict[str, object]:
     textlayer_pages = textlayer_pages or []
     if not textlayer_pages:
@@ -1239,6 +1241,9 @@ def extract_best_date(
                 best.get("confidence", 0.0),
             )
             return best
+
+    if not allow_ocr:
+        images = [] if images is None else images
 
     if images is None:
         images, img_err = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=pages)
@@ -1377,10 +1382,11 @@ def extract_best_date(
         except (pytesseract.TesseractError, TimeoutError) as e:
             _LOGGER.warning("Full page OCR fallback failed: %s", e)
 
-    filename_candidate = _extract_date_from_filename(pdf_path.name)
-    if filename_candidate:
-        _LOGGER.info("date filename fallback selected conf=%.2f", filename_candidate.get("confidence", 0.0))
-        return filename_candidate
+    if allow_filename_fallback:
+        filename_candidate = _extract_date_from_filename(pdf_path.name)
+        if filename_candidate:
+            _LOGGER.info("date filename fallback selected conf=%.2f", filename_candidate.get("confidence", 0.0))
+            return filename_candidate
 
     return {
         "date": None,
@@ -1733,13 +1739,15 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         s, c, src, guess = detect_supplier(textlayer_text)
         supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
 
-    # 2) Datum über Textlayer versuchen; OCR nur wenn nötig
+    # 2) Datum über Textlayer versuchen; KEIN OCR/Render hier (sonst doppelte PDF->Image Konvertierung)
     date_pick = extract_best_date(
         pdf_path,
         images=None,
         textlayer_pages=textlayer_pages,
         pages=OCR_PAGES,
         known_rotation=None,
+        allow_ocr=False,
+        allow_filename_fallback=False,
     )
     date_obj = date_pick.get("date")
     date_source = date_pick.get("source", "")
@@ -1754,6 +1762,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     # 3) Falls Textlayer nicht aussagekräftig: OCR als Fallback durchführen
     rotation_value = 0
+    images: List[object] = []
     if not skip_ocr and ((not textlayer_text.strip()) or (not date_obj)):
         images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
         if render_error and not textlayer_err:
@@ -1802,6 +1811,23 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                         date_source = best_candidate.get("source", "ocr")
                         date_confidence = best_candidate.get("confidence", 0.70) or 0.70
                         date_evidence = best_candidate.get("evidence", "") or ""
+
+            # Letzter Fallback: gezielte ROI/Crop-OCR OHNE erneutes Rendern
+            if not date_obj and images:
+                pick2 = extract_best_date(
+                    pdf_path,
+                    images=images,
+                    textlayer_pages=[],
+                    pages=OCR_PAGES,
+                    known_rotation=rotation_value,
+                    allow_ocr=True,
+                    allow_filename_fallback=True,
+                )
+                if pick2.get("date"):
+                    date_obj = pick2.get("date")
+                    date_source = pick2.get("source", "ocr")
+                    date_confidence = float(pick2.get("confidence", 0.0) or 0.0)
+                    date_evidence = str(pick2.get("evidence", "") or "")
 
         # Optional: KI-OCR Fallback (PaddleOCR) nur wenn weiterhin unsicher
         need_paddle = (

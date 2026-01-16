@@ -23,6 +23,8 @@
             {% if progress and progress["total"] %}
               <progress value="{{ progress["done"] }}" max="{{ progress["total"] }}"></progress>
               ({{ progress["done"] }}/{{ progress["total"] }})
+            {% else %}
+              <progress></progress>
             {% endif %}
             Seite aktualisiert sich automatisch.
           </p>
@@ -45,7 +47,7 @@
           </label>
           <label>
             <span>Datumsformat</span>
-            <select name="date_fmt">
+            <select name="date_fmt" data-role="date-format">
               <option value="%Y-%m-%d" selected>ISO (YYYY-MM-DD)</option>
               <option value="%d.%m.%Y">Deutsch (DD.MM.YYYY)</option>
               <option value="%d-%m-%Y">Deutsch mit Bindestrich (DD-MM-YYYY)</option>
@@ -54,6 +56,30 @@
           </label>
           <button type="submit">Upload &amp; Verarbeiten</button>
         </form>
+
+        <form action="{{ url_for('process_inbox') }}" method="post" class="inline-form" style="margin-top: 0.75rem;">
+          <input type="hidden" name="date_fmt" value="%Y-%m-%d" data-role="batch-date-format" />
+          <button type="submit" class="ghost">Eingang verarbeiten (data/eingang)</button>
+        </form>
+      </section>
+
+      <section class="panel docling-panel">
+        <h2>Docling-Analyse (Vorschau)</h2>
+        <p class="muted">Schnelle Vorschau mit Docling Document Processing Engine.</p>
+        <form enctype="multipart/form-data" id="docling-form">
+          <label class="file-input">
+            <span>PDF-Dateien für Docling-Analyse</span>
+            <input type="file" name="files" accept=".pdf,application/pdf" multiple id="docling-files" />
+          </label>
+          <button type="button" id="docling-analyze-btn" class="ghost">Docling-Analyse starten</button>
+        </form>
+        <div id="docling-results" style="display: none; margin-top: 1rem;">
+          <h3>Analyse-Ergebnisse</h3>
+          <div id="docling-results-content"></div>
+        </div>
+        <div id="docling-error" style="display: none; margin-top: 1rem; color: red;">
+          <strong>Fehler:</strong> <span id="docling-error-msg"></span>
+        </div>
       </section>
 
       <section class="panel">
@@ -216,6 +242,15 @@
           });
         });
 
+        const dateSelect = document.querySelector('select[data-role="date-format"]');
+        const batchDateInput = document.querySelector('input[data-role="batch-date-format"]');
+        if (dateSelect && batchDateInput) {
+          batchDateInput.value = dateSelect.value;
+          dateSelect.addEventListener('change', () => {
+            batchDateInput.value = dateSelect.value;
+          });
+        }
+
         document.querySelectorAll("[data-detail-toggle]").forEach((button) => {
           button.addEventListener("click", () => {
             const id = button.dataset.detailToggle;
@@ -358,6 +393,97 @@
             }
           });
         });
+      })();
+
+      // Docling-Analyse-Handler
+      (function doclingAnalysis() {
+        const analyzeBtn = document.getElementById("docling-analyze-btn");
+        const fileInput = document.getElementById("docling-files");
+        const resultsDiv = document.getElementById("docling-results");
+        const resultContent = document.getElementById("docling-results-content");
+        const errorDiv = document.getElementById("docling-error");
+        const errorMsg = document.getElementById("docling-error-msg");
+
+        if (!analyzeBtn) return;
+
+        analyzeBtn.addEventListener("click", async () => {
+          const files = fileInput.files;
+          if (!files || files.length === 0) {
+            errorMsg.textContent = "Keine Dateien ausgewählt";
+            errorDiv.style.display = "block";
+            resultsDiv.style.display = "none";
+            return;
+          }
+
+          analyzeBtn.disabled = true;
+          analyzeBtn.textContent = "Analysiere...";
+          errorDiv.style.display = "none";
+          resultsDiv.style.display = "none";
+
+          try {
+            const formData = new FormData();
+            for (let file of files) {
+              formData.append("files", file);
+            }
+
+            const response = await fetch("{{ url_for('analyze_docling') }}", {
+              method: "POST",
+              body: formData,
+            });
+
+            const result = await response.json();
+
+            if (!result.ok) {
+              errorMsg.textContent = result.error || "Unbekannter Fehler";
+              errorDiv.style.display = "block";
+              return;
+            }
+
+            // Zeige Ergebnisse
+            resultContent.innerHTML = "";
+            if (result.results && result.results.length > 0) {
+              result.results.forEach((res) => {
+                const div = document.createElement("div");
+                div.style.marginBottom = "1.5rem";
+                div.style.padding = "1rem";
+                div.style.border = "1px solid #ddd";
+                div.style.borderRadius = "4px";
+
+                let html = `<strong>${escapeHtml(res.filename)}</strong><br/>`;
+                if (res.error) {
+                  html += `<span style="color: red;">Fehler: ${escapeHtml(res.error)}</span>`;
+                } else {
+                  html += `<small>Text-Länge: ${res.text_length} Zeichen<br/>`;
+                  if (res.supplier) html += `Lieferant: <strong>${escapeHtml(res.supplier)}</strong><br/>`;
+                  if (res.date) html += `Datum: <strong>${escapeHtml(res.date)}</strong><br/>`;
+                  if (res.metadata) html += `Seiten: ${res.metadata.num_pages}<br/>`;
+                  if (res.tables_found) html += `Tabellen: ${res.tables_found}<br/>`;
+                  html += `</small><br/><pre style="background: #f5f5f5; padding: 0.5rem; overflow-x: auto; font-size: 0.85rem;">${escapeHtml(res.text)}</pre>`;
+                }
+                div.innerHTML = html;
+                resultContent.appendChild(div);
+              });
+              resultsDiv.style.display = "block";
+            }
+          } catch (err) {
+            errorMsg.textContent = "Netzwerkfehler: " + err.message;
+            errorDiv.style.display = "block";
+          } finally {
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = "Docling-Analyse starten";
+          }
+        });
+
+        function escapeHtml(text) {
+          const map = {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#039;",
+          };
+          return String(text).replace(/[&<>"']/g, (m) => map[m]);
+        }
       })();
     </script>
   </body>

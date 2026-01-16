@@ -1,0 +1,123 @@
+# ================================================================
+# Docker Compose für Docaro Services
+# Startet: Qdrant, Label Studio, MLflow
+# ================================================================
+
+version: '3.8'
+
+services:
+  # ──────────────────────────────────────────────────────────────
+  # QDRANT: Vektordatenbank für semantische Suche
+  # ──────────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: docaro_qdrant
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    networks:
+      - docaro_network
+
+  # ──────────────────────────────────────────────────────────────
+  # LABEL STUDIO: Annotations & Trainingsdaten-Management
+  # ──────────────────────────────────────────────────────────────
+  label-studio:
+    image: heartexlabs/label-studio:latest
+    container_name: docaro_label_studio
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./label_studio_data:/label-studio/data
+      - ./label_studio_media:/label-studio/media
+    environment:
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/media
+    restart: unless-stopped
+    networks:
+      - docaro_network
+
+  # ──────────────────────────────────────────────────────────────
+  # MLFLOW: Experiment-Tracking & Model Registry
+  # ──────────────────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: docaro_mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow_data:/mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    restart: unless-stopped
+    networks:
+      - docaro_network
+
+  # ──────────────────────────────────────────────────────────────
+  # OPTIONAL: DOCLING-SERVE (API-Service für Docling)
+  # ──────────────────────────────────────────────────────────────
+  # Hinweis: Docling-Serve ist noch in Entwicklung
+  # Sobald verfügbar, kann es hier eingebunden werden
+  #
+  # docling-serve:
+  #   image: docling/docling-serve:latest
+  #   container_name: docaro_docling_serve
+  #   ports:
+  #     - "8000:8000"
+  #   restart: unless-stopped
+  #   networks:
+  #     - docaro_network
+
+networks:
+  docaro_network:
+    driver: bridge
+
+# ================================================================
+# VERWENDUNG
+# ================================================================
+#
+# Alle Services starten:
+#   docker-compose -f docker/docker-compose.yml up -d
+#
+# Services stoppen:
+#   docker-compose -f docker/docker-compose.yml down
+#
+# Logs anzeigen:
+#   docker-compose -f docker/docker-compose.yml logs -f
+#
+# Einzelnen Service starten:
+#   docker-compose -f docker/docker-compose.yml up -d qdrant
+#
+# ================================================================
+# ZUGRIFF
+# ================================================================
+#
+# Qdrant REST API:     http://localhost:6333
+# Qdrant Web UI:       http://localhost:6333/dashboard
+#
+# Label Studio:        http://localhost:8080
+#   Default Login:     Beim ersten Start erstellen
+#
+# MLflow UI:           http://localhost:5000
+#
+# ================================================================
+# PERSISTENTE DATEN
+# ================================================================
+#
+# Alle Daten werden in folgenden Ordnern gespeichert:
+#   - qdrant_storage/        : Qdrant Vektoren
+#   - label_studio_data/     : Label Studio Projekte & Tasks
+#   - label_studio_media/    : Hochgeladene Dateien
+#   - mlflow_data/           : MLflow Experimente & Modelle
+#
+# Diese Ordner bleiben erhalten, auch wenn Container gestoppt werden.
+#
+# ================================================================

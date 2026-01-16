@@ -6,6 +6,14 @@ python-dateutil
 PyPDF2
 pdfplumber
 
+# Docling für fortgeschrittene Dokumentenverarbeitung
+docling>=0.12.0
+# Docling-core für DoclingDocument, Chunking, Serialization
+docling-core>=2.50.0
+
 # Optional (KI-OCR Fallback für schwierige Scan-PDFs):
-# paddleocr
-# numpy
+paddleocr
+numpy
+
+# Optional (Experiment Tracking / ML Ops):
+mlflow

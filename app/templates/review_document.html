@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Dokument - Docaro</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>📝 Dokument Review</h1>
+        <nav>
+            <a href="{{ url_for('review.quarantine_list') }}">← Zurück zur Quarantäne</a>
+        </nav>
+    </header>
+    
+    <main>
+        <section class="document-info">
+            <h2>{{ entry.original_name }}</h2>
+            <p><strong>Quarantäne-Grund:</strong> {{ entry.quarantine_reason }}</p>
+        </section>
+        
+        <div class="review-container">
+            <div class="pdf-viewer">
+                <h3>PDF-Vorschau</h3>
+                <iframe src="{{ url_for('view_pdf', filename=entry.document_path) }}" 
+                        width="100%" 
+                        height="700px">
+                </iframe>
+            </div>
+            
+            <div class="review-form">
+                <h3>Korrekturen</h3>
+                
+                <form id="reviewForm">
+                    <input type="hidden" name="document_path" value="{{ entry.document_path }}">
+                    
+                    <div class="form-group">
+                        <label for="supplier">Lieferant:</label>
+                        <input type="text" 
+                               id="supplier" 
+                               name="supplier" 
+                               value="{{ entry.supplier or '' }}"
+                               placeholder="Lieferantenname">
+                        <small>Confidence: {{ "%.0f"|format(entry.supplier_confidence * 100) }}%</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="date">Datum:</label>
+                        <input type="date" 
+                               id="date" 
+                               name="date" 
+                               value="{{ entry.date or '' }}">
+                        <small>Confidence: {{ "%.0f"|format(entry.date_confidence * 100) }}%</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="document_type">Dokumenttyp:</label>
+                        <select id="document_type" name="document_type">
+                            <option value="Rechnung" {% if entry.document_type == 'Rechnung' %}selected{% endif %}>Rechnung</option>
+                            <option value="Lieferschein" {% if entry.document_type == 'Lieferschein' %}selected{% endif %}>Lieferschein</option>
+                            <option value="Gutschrift" {% if entry.document_type == 'Gutschrift' %}selected{% endif %}>Gutschrift</option>
+                            <option value="Servicebericht" {% if entry.document_type == 'Servicebericht' %}selected{% endif %}>Servicebericht</option>
+                            <option value="Angebot" {% if entry.document_type == 'Angebot' %}selected{% endif %}>Angebot</option>
+                            <option value="Auftrag" {% if entry.document_type == 'Auftrag' %}selected{% endif %}>Auftrag</option>
+                            <option value="Unklar" {% if entry.document_type == 'Unklar' %}selected{% endif %}>Unklar</option>
+                        </select>
+                        <small>Confidence: {{ "%.0f"|format(entry.doctype_confidence * 100) }}%</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="reviewed_by">Reviewed by:</label>
+                        <input type="text" 
+                               id="reviewed_by" 
+                               name="reviewed_by" 
+                               placeholder="Ihr Name"
+                               required>
+                    </div>
+                    
+                    <button type="submit" class="btn-primary">✓ Speichern & Freigeben</button>
+                </form>
+                
+                <div id="resultMessage" class="message hidden"></div>
+            </div>
+        </div>
+        
+        {% if audit %}
+        <section class="audit-details">
+            <h3>Audit-Details</h3>
+            <details>
+                <summary>Extraktion-Metadaten</summary>
+                <pre>{{ audit | tojson(indent=2) }}</pre>
+            </details>
+        </section>
+        {% endif %}
+    </main>
+    
+    <script>
+        document.getElementById('reviewForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const data = {
+                document_path: formData.get('document_path'),
+                supplier: formData.get('supplier'),
+                date: formData.get('date'),
+                document_type: formData.get('document_type'),
+                reviewed_by: formData.get('reviewed_by')
+            };
+            
+            const resultDiv = document.getElementById('resultMessage');
+            resultDiv.textContent = 'Speichere...';
+            resultDiv.className = 'message info';
+            
+            try {
+                const response = await fetch('/review/submit', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    resultDiv.textContent = '✓ Gespeichert! Weiterleitung...';
+                    resultDiv.className = 'message success';
+                    
+                    setTimeout(() => {
+                        window.location.href = '{{ url_for("review.quarantine_list") }}';
+                    }, 1500);
+                } else {
+                    resultDiv.textContent = '✗ Fehler: ' + result.error;
+                    resultDiv.className = 'message error';
+                }
+            } catch (error) {
+                resultDiv.textContent = '✗ Fehler: ' + error.message;
+                resultDiv.className = 'message error';
+            }
+        });
+    </script>
+    
+    <style>
+        .review-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+        
+        .pdf-viewer iframe {
+            border: 1px solid #ddd;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: bold;
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .form-group small {
+            display: block;
+            margin-top: 0.25rem;
+            color: #666;
+        }
+        
+        .btn-primary {
+            background-color: #28a745;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+        }
+        
+        .btn-primary:hover {
+            background-color: #218838;
+        }
+        
+        .message {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 4px;
+        }
+        
+        .message.hidden {
+            display: none;
+        }
+        
+        .message.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .message.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .audit-details {
+            margin-top: 2rem;
+        }
+        
+        .audit-details pre {
+            background-color: #f5f5f5;
+            padding: 1rem;
+            overflow-x: auto;
+            font-size: 0.9rem;
+        }
+    </style>
+</body>
+</html>

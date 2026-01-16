@@ -42,19 +42,39 @@ try {
 	foreach ($l in $listeners) {
 		if ($l.OwningProcess) {
 			Write-Host "Stoppe Prozess auf Port 5001 (PID $($l.OwningProcess))..." -ForegroundColor Yellow
-			Stop-Process -Id $l.OwningProcess -Force -ErrorAction SilentlyContinue
+			Stop-Process -Id $l.OwningProcess -Force -ErrorAction Continue
 		}
 	}
 } catch {}
 
-# 2) Zusätzlich: laufende python.exe mit app\app.py beenden
+# Sicherstellen, dass der Port wirklich frei ist (sonst läuft evtl. eine andere Python-Instanz weiter)
 try {
-	$existing = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object {
-		$_.CommandLine -and ($_.CommandLine -like '*\\app\\app.py*')
+	$deadline = (Get-Date).AddSeconds(5)
+	while ((Get-Date) -lt $deadline) {
+		$still = Get-NetTCPConnection -LocalPort 5001 -State Listen -ErrorAction SilentlyContinue
+		if (-not $still) { break }
+		Start-Sleep -Milliseconds 200
+	}
+	$still = Get-NetTCPConnection -LocalPort 5001 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+	if ($still -and $still.OwningProcess) {
+		$pid = $still.OwningProcess
+		$proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction SilentlyContinue
+		Write-Host "FEHLER: Port 5001 ist weiterhin belegt (PID $pid, Name $($proc.Name))." -ForegroundColor Red
+		Write-Host "CommandLine: $($proc.CommandLine)" -ForegroundColor DarkGray
+		Write-Host "Bitte Prozess beenden oder Port wechseln." -ForegroundColor Red
+		return
+	}
+} catch {}
+
+# 2) Zusätzlich: laufende Python-Prozesse mit app\app.py beenden (python.exe UND python3*.exe)
+try {
+	$existing = Get-CimInstance Win32_Process | Where-Object {
+		$_.Name -in @('python.exe','python3.exe','python3.11.exe') -and
+		$_.CommandLine -and ($_.CommandLine -like '*\app\app.py*')
 	}
 	foreach ($p in $existing) {
 		Write-Host "Stoppe laufende Docaro-Instanz (PID $($p.ProcessId))..." -ForegroundColor Yellow
-		Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+		Stop-Process -Id $p.ProcessId -Force -ErrorAction Continue
 	}
 } catch {}
 

@@ -48,6 +48,7 @@ from core.extractor import (
     build_new_filename,
     INTERNAL_DATE_FORMAT,
 )
+from core.docling_extractor import is_docling_available, get_extractor as get_docling_extractor
 from utils import normalize_text
 from config import Config
 
@@ -56,11 +57,16 @@ DATA_DIR = config.DATA_DIR
 INBOX_DIR = config.INBOX_DIR
 OUT_DIR = config.OUT_DIR
 TMP_DIR = config.TMP_DIR
+QUARANTINE_DIR = getattr(config, "QUARANTINE_DIR", (DATA_DIR / "quarantaene"))
 SUPPLIER_CORRECTIONS_PATH = config.SUPPLIER_CORRECTIONS_PATH
 SESSION_FILES_PATH = config.SESSION_FILES_PATH
 SESSION_FILES_LOCK = config.SESSION_FILES_LOCK
 HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
+
+# Quarantäne-Schwellen: unsicher, wenn darunter (oder wenn Datum/Lieferant fehlt)
+QUARANTINE_SUPPLIER_CONF_MIN = float(os.getenv("DOCARO_QUAR_SUPPLIER_MIN", "0.85"))
+QUARANTINE_DATE_CONF_MIN = float(os.getenv("DOCARO_QUAR_DATE_MIN", "0.75"))
 
 try:
     import msvcrt  # type: ignore
@@ -95,6 +101,11 @@ app.logger = logger
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config["DEBUG"] = DEBUG_MODE
+
+# Registriere Review-Blueprint
+from app.review_routes import review_bp
+app.register_blueprint(review_bp)
+
 
 
 def _log_exception(context: str, exc: Exception) -> None:
@@ -174,6 +185,189 @@ def status_json():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.post("/analyze_docling")
+def analyze_docling():
+    """Analysiert hochgeladene PDF mit Docling für Vorschau."""
+    try:
+        if not is_docling_available():
+            return jsonify({
+                "ok": False,
+                "error": "Docling ist nicht installiert"
+            }), 400
+        
+        uploaded = request.files.getlist("files")
+        if not uploaded:
+            uploaded = request.files.getlist("files[]")
+        
+        uploaded = [f for f in uploaded if getattr(f, "filename", None)]
+        if not uploaded:
+            return jsonify({
+                "ok": False,
+                "error": "Keine Dateien hochgeladen"
+            }), 400
+        
+        extractor = get_docling_extractor()
+        if not extractor:
+            return jsonify({
+                "ok": False,
+                "error": "Docling Extractor konnte nicht initialisiert werden"
+            }), 500
+        
+        results = []
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        
+        for storage in uploaded:
+            if not storage or not storage.filename:
+                continue
+            safe_name = secure_filename(storage.filename)
+            if not safe_name or not _allowed_file(safe_name):
+                continue
+            
+            temp_path = TMP_DIR / f"docling_temp_{uuid4().hex}.pdf"
+            storage.save(temp_path)
+            
+            try:
+                # Extrahiere Informationen mit Docling
+                text = extractor.extract_text(temp_path)
+                metadata = extractor.extract_metadata(temp_path)
+                tables = extractor.extract_tables(temp_path)
+                supplier = extractor.extract_supplier(temp_path)
+                date = extractor.extract_date(temp_path, supplier)
+                
+                results.append({
+                    "filename": safe_name,
+                    "text": text[:500] + "..." if len(text) > 500 else text,
+                    "text_length": len(text),
+                    "metadata": metadata,
+                    "tables_found": len(tables),
+                    "supplier": supplier,
+                    "date": date.isoformat() if date else None,
+                })
+            except Exception as e:
+                logger.error(f"Fehler bei Docling-Analyse von {safe_name}: {e}")
+                results.append({
+                    "filename": safe_name,
+                    "error": str(e)
+                })
+            finally:
+                # Cleanup
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        
+        return jsonify({
+            "ok": True,
+            "results": results,
+            "docling_available": True
+        })
+    
+    except Exception as exc:
+        _log_exception("analyze_docling:handler", exc)
+        return jsonify({
+            "ok": False,
+            "error": str(exc)
+        }), 500
+
+
+@app.get("/docling_status.json")
+def docling_status_json():
+    """Gibt Status der Docling-Verfügbarkeit zurück."""
+    try:
+        return jsonify({
+            "ok": True,
+            "docling_available": is_docling_available(),
+            "message": "Docling ist verfügbar" if is_docling_available() 
+                      else "Docling nicht installiert - installiere mit: pip install docling"
+        })
+    except Exception as exc:
+        logger.error(f"Fehler bei docling_status: {exc}")
+        return jsonify({
+            "ok": False,
+            "docling_available": False,
+            "error": str(exc)
+        }), 500
+
+
+@app.post("/chunk_document")
+def chunk_document():
+    """Chunked ein Dokument für RAG/LLM-Verwendung mit docling-core."""
+    try:
+        if not is_docling_available():
+            return jsonify({
+                "ok": False,
+                "error": "Docling ist nicht installiert"
+            }), 400
+        
+        uploaded = request.files.getlist("files")
+        if not uploaded:
+            uploaded = request.files.getlist("files[]")
+        
+        uploaded = [f for f in uploaded if getattr(f, "filename", None)]
+        if not uploaded:
+            return jsonify({
+                "ok": False,
+                "error": "Keine Dateien hochgeladen"
+            }), 400
+        
+        max_tokens = int(request.form.get("max_tokens", 512))
+        tokenizer = request.form.get("tokenizer", "sentence")
+        
+        extractor = get_docling_extractor()
+        if not extractor:
+            return jsonify({
+                "ok": False,
+                "error": "Docling Extractor konnte nicht initialisiert werden"
+            }), 500
+        
+        results = []
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        
+        for storage in uploaded[:1]:  # Nur erste Datei für Demo
+            if not storage or not storage.filename:
+                continue
+            safe_name = secure_filename(storage.filename)
+            if not safe_name or not _allowed_file(safe_name):
+                continue
+            
+            temp_path = TMP_DIR / f"chunk_temp_{uuid4().hex}.pdf"
+            storage.save(temp_path)
+            
+            try:
+                chunks = extractor.chunk_document(temp_path, tokenizer=tokenizer, max_tokens=max_tokens)
+                
+                results.append({
+                    "filename": safe_name,
+                    "num_chunks": len(chunks),
+                    "chunks": chunks[:5],  # Nur erste 5 Chunks in Preview
+                    "tokenizer": tokenizer,
+                    "max_tokens": max_tokens
+                })
+            except Exception as e:
+                logger.error(f"Fehler beim Chunken von {safe_name}: {e}")
+                results.append({
+                    "filename": safe_name,
+                    "error": str(e)
+                })
+            finally:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        
+        return jsonify({
+            "ok": True,
+            "results": results
+        })
+    
+    except Exception as exc:
+        _log_exception("chunk_document:handler", exc)
+        return jsonify({
+            "ok": False,
+            "error": str(exc)
+        }), 500
+
+
 @app.post("/upload")
 def upload():
     try:
@@ -243,7 +437,11 @@ def upload_overview():
 
 def _list_finished():
     results = _load_last_results() or []
-    files = [item.get("out_name") for item in results if item.get("out_name")]
+    files = [
+        item.get("out_name")
+        for item in results
+        if item.get("out_name") and not item.get("quarantined")
+    ]
     return sorted({name for name in files if name})
 
 
@@ -308,7 +506,8 @@ def _load_progress() -> Optional[dict]:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        # PowerShell (Set-Content) kann UTF-8 mit BOM schreiben; das würde json.loads sonst brechen.
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return None
 
@@ -330,20 +529,61 @@ def _is_processing() -> bool:
         return False
 
 def _background_process_upload(upload_dir: Path, date_fmt: str) -> None:
+    _background_process_folder(upload_dir, date_fmt=date_fmt, cleanup_input_dir=True, log_context="upload:bg_worker")
+
+
+@app.post("/process_inbox")
+def process_inbox():
+    try:
+        if _is_processing():
+            flash("Es läuft bereits eine Verarbeitung.")
+            return redirect(url_for("index"))
+
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        pdfs = sorted(INBOX_DIR.glob("*.pdf"))
+        if not pdfs:
+            flash("Keine PDFs in data/eingang gefunden.")
+            return redirect(url_for("index"))
+
+        date_fmt = request.form.get("date_fmt", "").strip()
+        if date_fmt not in ALLOWED_DATE_FORMATS:
+            date_fmt = "%Y-%m-%d"
+
+        _set_progress(total=len(pdfs), done=0)
+        _set_processing(True)
+        threading.Thread(
+            target=_background_process_folder,
+            args=(INBOX_DIR, date_fmt),
+            kwargs={"cleanup_input_dir": False, "log_context": "inbox:bg_worker"},
+            daemon=True,
+        ).start()
+        return redirect(url_for("index"))
+    except Exception as exc:
+        _log_exception("inbox:handler", exc)
+        raise
+
+
+def _background_process_folder(
+    input_dir: Path,
+    date_fmt: str,
+    cleanup_input_dir: bool = False,
+    log_context: str = "bg_worker",
+) -> None:
     try:
         def _progress_cb(done: int, total: int, filename: str) -> None:
             _set_progress(total=total, done=done)
 
-        results = process_folder(upload_dir, OUT_DIR, date_format=date_fmt, progress_callback=_progress_cb)
-        _clear_pdfs(upload_dir)
+        results = process_folder(input_dir, OUT_DIR, date_format=date_fmt, progress_callback=_progress_cb)
+        if cleanup_input_dir:
+            _clear_pdfs(input_dir)
         # WICHTIG: Keine Session-Zugriffe im Hintergrund-Thread!
         # IDs und Session-Mapping werden in der Index-Route gesetzt.
         results = _apply_result_flags(results)
+        results = _apply_quarantine(results)
         _save_last_results(results)
     except Exception as exc:
-        _log_exception("upload:bg_worker", exc)
+        _log_exception(log_context, exc)
     finally:
-        # Hintergrund-Flag entfernen
         try:
             flag = _processing_flag_path()
             if flag.exists():
@@ -522,9 +762,16 @@ def _row_payload(file_id: str, message: str = "") -> dict:
         "supplier_source": result.get("supplier_source") or "",
         "supplier_confidence": result.get("supplier_confidence") or "",
         "date": result.get("date") or "",
+        "date_confidence": result.get("date_confidence") or "",
         "error": result.get("error") or "",
         "tesseract_status": result.get("tesseract_status") or "",
         "poppler_status": result.get("poppler_status") or "",
+        "ocr_rotation": result.get("ocr_rotation") or "",
+        "ocr_rotation_reason": result.get("ocr_rotation_reason") or "",
+        "timing_render_ms": result.get("timing_render_ms") or "",
+        "timing_ocr_ms": result.get("timing_ocr_ms") or "",
+        "timing_total_ms": result.get("timing_total_ms") or "",
+        "quarantined": bool(result.get("quarantined")),
         "supplier_missing": bool(result.get("supplier_missing")),
         "date_missing": bool(result.get("date_missing")),
         "needs_review": bool(result.get("needs_review")),
@@ -654,6 +901,7 @@ def confirm_supplier():
         supplier_before = before.get("supplier") or ""
         date_before = before.get("date") or ""
         pdf_path = _resolve_file_path(file_id) or resolve_pdf_path(filename)
+        original_path = str(pdf_path) if pdf_path else str(resolve_pdf_path(filename) or "")
         new_name = filename
         if pdf_path:
             _set_session_file_entry(file_id, pdf_path, pdf_path.name)
@@ -676,6 +924,16 @@ def confirm_supplier():
             elif date_before:
                 _set_result_error(file_id, "rename_skipped: invalid_date")
         _update_last_results(file_id, supplier_name, new_name=new_name)
+
+        if pdf_path:
+            synced_path, sync_error = _sync_pdf_location(file_id, pdf_path)
+            if sync_error:
+                _set_result_error(file_id, f"move_failed: {sync_error}")
+                message = "Lieferant gespeichert, aber Verschieben fehlgeschlagen."
+            elif synced_path:
+                pdf_path = synced_path
+                if pdf_path.name != new_name:
+                    new_name = pdf_path.name
         corrections = _load_supplier_corrections()
         corrections[file_id] = supplier_name
         _save_supplier_corrections(corrections)
@@ -683,8 +941,8 @@ def confirm_supplier():
             {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "file_id": file_id,
-                "original_path": str(resolve_pdf_path(filename) or ""),
-                "new_path": str(pdf_path or resolve_pdf_path(filename) or ""),
+                "original_path": original_path,
+                "new_path": str(pdf_path or ""),
                 "filename_before": filename,
                 "filename_after": new_name,
                 "supplier_before": supplier_before,
@@ -717,6 +975,9 @@ def _update_last_results(file_id: str, supplier_name: str, new_name: str = "") -
                 item["out_name"] = new_name
             item["supplier_missing"] = _is_supplier_missing(supplier_name)
             item["supplier_broken"] = _is_supplier_broken(supplier_name)
+            needed, reason = _is_quarantine_needed(item)
+            item["quarantined"] = "1" if needed else ""
+            item["quarantine_reason"] = reason if needed else ""
             item["needs_review"] = _is_review_needed(item)
             break
     _save_last_results(results)
@@ -735,6 +996,9 @@ def _update_last_results_date(file_id: str, new_name: str, date_iso: str) -> Non
             if new_name:
                 item["out_name"] = new_name
             item["date_missing"] = _is_date_missing(date_iso, False)
+            needed, reason = _is_quarantine_needed(item)
+            item["quarantined"] = "1" if needed else ""
+            item["quarantine_reason"] = reason if needed else ""
             item["needs_review"] = _is_review_needed(item)
             break
     _save_last_results(results)
@@ -813,10 +1077,73 @@ def _allowed_roots() -> list[Path]:
         TMP_DIR,
         INBOX_DIR,
         OUT_DIR,
+        QUARANTINE_DIR,
         DATA_DIR / "fertig",
         BASE_DIR / "daten_eingang",
         BASE_DIR / "daten_fertig",
     ]
+
+
+def _parse_conf(value: object) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_quarantine_needed(item: dict) -> Tuple[bool, str]:
+    if bool(item.get("date_missing")):
+        return True, "date_missing"
+    if bool(item.get("supplier_missing")):
+        return True, "supplier_missing"
+    supplier_conf = _parse_conf(item.get("supplier_confidence"))
+    date_conf = _parse_conf(item.get("date_confidence"))
+    if supplier_conf and supplier_conf < QUARANTINE_SUPPLIER_CONF_MIN:
+        return True, f"supplier_conf<{QUARANTINE_SUPPLIER_CONF_MIN:.2f}"
+    if date_conf and date_conf < QUARANTINE_DATE_CONF_MIN:
+        return True, f"date_conf<{QUARANTINE_DATE_CONF_MIN:.2f}"
+    return False, ""
+
+
+def _apply_quarantine(results: list) -> list:
+    """Moves uncertain PDFs into QUARANTINE_DIR and marks results.
+
+    Must never raise: quarantine is a best-effort safety net.
+    """
+    if not results:
+        return results
+    try:
+        QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return results
+
+    for item in results:
+        needed, reason = _is_quarantine_needed(item)
+        item["quarantined"] = "1" if needed else ""
+        item["quarantine_reason"] = reason if needed else ""
+        if not needed:
+            continue
+
+        filename = str(item.get("out_name") or "").strip()
+        if not filename:
+            continue
+
+        try:
+            current = resolve_pdf_path(filename)
+            if not current or not current.exists() or not _is_allowed_pdf_path(current):
+                continue
+            # Already in quarantine
+            try:
+                current.resolve().relative_to(QUARANTINE_DIR.resolve())
+                continue
+            except Exception:
+                pass
+            target = get_unique_path(QUARANTINE_DIR, current.name)
+            current.replace(target)
+        except OSError:
+            continue
+
+    return results
 
 
 def _is_allowed_pdf_path(path: Path) -> bool:
@@ -952,15 +1279,57 @@ def _trim_history() -> None:
 
 
 def _rename_pdf_with_name(pdf_path: Path, filename: str) -> Tuple[Optional[Path], str]:
+    return _move_pdf_to_dir(pdf_path, OUT_DIR, filename)
+
+
+def _move_pdf_to_dir(pdf_path: Path, target_dir: Path, filename: str) -> Tuple[Optional[Path], str]:
     try:
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-        target_path = get_unique_path(OUT_DIR, filename)
-        if pdf_path.resolve() == target_path.resolve():
-            return pdf_path, ""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        direct_target = target_dir / filename
+        try:
+            if pdf_path.resolve() == direct_target.resolve():
+                return pdf_path, ""
+        except OSError:
+            pass
+
+        target_path = direct_target
+        if target_path.exists():
+            target_path = get_unique_path(target_dir, filename)
         pdf_path.replace(target_path)
         return target_path, ""
     except OSError as exc:
         return None, str(exc)
+
+
+def _update_last_results_out_name(file_id: str, new_name: str) -> None:
+    if not file_id or not new_name:
+        return
+    results = _load_last_results() or []
+    for item in results:
+        if item.get("file_id") == file_id:
+            item["out_name"] = new_name
+            break
+    _save_last_results(results)
+
+
+def _sync_pdf_location(file_id: str, pdf_path: Path) -> Tuple[Optional[Path], str]:
+    """Move/rename the PDF to OUT_DIR or QUARANTINE_DIR based on current result flags.
+
+    Keeps `out_name` and the session file map consistent if a unique name is generated.
+    """
+    if not file_id:
+        return pdf_path, ""
+    result = _result_for_file_id(file_id) or {}
+    quarantined = bool(result.get("quarantined"))
+    desired_dir = QUARANTINE_DIR if quarantined else OUT_DIR
+    desired_name = (result.get("out_name") or "").strip() or pdf_path.name
+    target_path, err = _move_pdf_to_dir(pdf_path, desired_dir, desired_name)
+    if err or not target_path:
+        return None, err
+    _set_session_file_entry(file_id, target_path, target_path.name)
+    if desired_name and target_path.name != desired_name:
+        _update_last_results_out_name(file_id, target_path.name)
+    return target_path, ""
 
 
 def _set_result_error(file_id: str, message: str) -> None:
@@ -1115,26 +1484,28 @@ def confirm_date_from_view():
     supplier = (result.get("supplier") or "").strip() or "Unbekannt"
 
     new_filename = build_new_filename(supplier, date_obj, date_format=date_fmt)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if pdf_path.name == new_filename and pdf_path.parent == OUT_DIR:
-        target_path = pdf_path
-    else:
-        target_path = get_unique_path(OUT_DIR, new_filename)
-        try:
-            pdf_path.replace(target_path)
-        except OSError:
-            return _render_view_pdf(file_id, date_error="Datei konnte nicht umbenannt werden.")
+    original_path = str(pdf_path)
+    target_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+    if move_error or not target_path:
+        return _render_view_pdf(file_id, date_error="Datei konnte nicht umbenannt werden.")
 
     date_iso = date_obj.strftime(INTERNAL_DATE_FORMAT)
     _set_session_file_entry(file_id, target_path, target_path.name)
     _update_last_results_date(file_id, target_path.name, date_iso)
+
+    synced_path, sync_error = _sync_pdf_location(file_id, target_path)
+    if sync_error:
+        _set_result_error(file_id, f"move_failed: {sync_error}")
+    elif synced_path:
+        target_path = synced_path
+
     if target_path and target_path.name != filename:
         flash(f"Umbenannt zu: {target_path.name}")
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "file_id": file_id,
-            "original_path": str(pdf_path),
+            "original_path": original_path,
             "new_path": str(target_path),
             "filename_before": filename,
             "filename_after": target_path.name,
@@ -1184,20 +1555,22 @@ def confirm_date():
     supplier = (result.get("supplier") or "").strip() or "Unbekannt"
 
     new_filename = build_new_filename(supplier, date_obj, date_format=date_fmt)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if pdf_path.name == new_filename and pdf_path.parent == OUT_DIR:
-        target_path = pdf_path
-    else:
-        target_path = get_unique_path(OUT_DIR, new_filename)
-        try:
-            pdf_path.replace(target_path)
-        except OSError:
-            flash("Datei konnte nicht umbenannt werden.")
-            return redirect(url_for("index"))
+    original_path = str(pdf_path)
+    target_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+    if move_error or not target_path:
+        flash("Datei konnte nicht umbenannt werden.")
+        return redirect(url_for("index"))
 
     date_iso = date_obj.strftime(INTERNAL_DATE_FORMAT)
     _set_session_file_entry(file_id, target_path, target_path.name)
     _update_last_results_date(file_id, target_path.name, date_iso)
+
+    synced_path, sync_error = _sync_pdf_location(file_id, target_path)
+    if sync_error:
+        _set_result_error(file_id, f"move_failed: {sync_error}")
+    elif synced_path:
+        target_path = synced_path
+
     message = "Datum gespeichert."
     if target_path and target_path.name != filename:
         message = f"Umbenannt zu: {target_path.name}"
@@ -1205,7 +1578,7 @@ def confirm_date():
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "file_id": file_id,
-            "original_path": str(pdf_path),
+            "original_path": original_path,
             "new_path": str(target_path),
             "filename_before": filename,
             "filename_after": target_path.name,

@@ -13,6 +13,7 @@ class Config:
     INBOX_DIR = DATA_DIR / "eingang"
     OUT_DIR = DATA_DIR / "fertig"
     TMP_DIR = DATA_DIR / "tmp"
+    QUARANTINE_DIR = DATA_DIR / "quarantaene"
     SUPPLIER_CORRECTIONS_PATH = DATA_DIR / "supplier_corrections.json"
     SESSION_FILES_PATH = DATA_DIR / "session_files.json"
     # Lock-Datei für Cross-Process File Locking (siehe app/_locked_file)

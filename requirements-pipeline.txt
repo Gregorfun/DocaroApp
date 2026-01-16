@@ -1,0 +1,95 @@
+# ================================================================
+# Docaro Pipeline Dependencies
+# Alle Tools für die moderne Dokumenten-Verarbeitungs-Pipeline
+# ================================================================
+
+# ────────────────────────────────────────────────────────────────
+# KERN-DEPENDENCIES (bereits in requirements.txt)
+# ────────────────────────────────────────────────────────────────
+flask>=2.3.0
+pdf2image>=1.16.0
+pytesseract>=0.3.10
+pillow>=10.0.0
+python-dateutil>=2.8.2
+PyPDF2>=3.0.0
+pdfplumber>=0.10.0
+
+# ────────────────────────────────────────────────────────────────
+# DOCLING-SUITE: Dokumenten-Parsing & Layout-Analyse
+# ────────────────────────────────────────────────────────────────
+# Docling: PDF → DoclingDocument mit Layout-Analyse
+docling>=0.12.0
+
+# Docling-Core: Strukturierte Datentypen, Chunking, Serialization
+docling-core>=2.50.0
+
+# ────────────────────────────────────────────────────────────────
+# OCR-STACK: Für gescannte PDFs
+# ────────────────────────────────────────────────────────────────
+# OCRmyPDF: Macht gescannte PDFs durchsuchbar
+ocrmypdf>=15.0.0
+
+# PaddleOCR: Hochpräzise OCR für 100+ Sprachen
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
+
+# EasyOCR: Leichtgewichtige Alternative (optional)
+easyocr>=1.7.0
+
+# ────────────────────────────────────────────────────────────────
+# SEMANTISCHE SUCHE: Vektordatenbanken & Embeddings
+# ────────────────────────────────────────────────────────────────
+# Sentence Transformers: Embedding-Modelle
+sentence-transformers>=2.2.0
+
+# Chroma: Lightweight Vektordatenbank
+chromadb>=0.4.0
+
+# Qdrant Client: High-Performance Vektordatenbank (optional)
+qdrant-client>=1.7.0
+
+# ────────────────────────────────────────────────────────────────
+# ML-LIFECYCLE: Training, Tracking, Deployment
+# ────────────────────────────────────────────────────────────────
+# MLflow: Experiment-Tracking & Model Registry
+mlflow>=2.9.0
+
+# Scikit-learn: ML-Modelle (Klassifikation, Regression)
+scikit-learn>=1.3.0
+
+# Transformers: BERT-basierte Klassifikation (optional)
+transformers>=4.35.0
+torch>=2.1.0
+
+# ────────────────────────────────────────────────────────────────
+# LABEL STUDIO: Annotations & Trainingsdaten
+# ────────────────────────────────────────────────────────────────
+# Label Studio SDK: API-Integration
+label-studio-sdk>=0.0.30
+
+# ────────────────────────────────────────────────────────────────
+# UTILITIES
+# ────────────────────────────────────────────────────────────────
+# Numpy: Numerische Berechnungen
+numpy>=1.24.0
+
+# Pandas: Datenanalyse
+pandas>=2.0.0
+
+# Structlog: Structured Logging
+structlog>=23.1.0
+
+# Tqdm: Progress Bars
+tqdm>=4.66.0
+
+# Requests: HTTP-Requests (für APIs)
+requests>=2.31.0
+
+# ────────────────────────────────────────────────────────────────
+# ENTWICKLUNG & TESTING (optional)
+# ────────────────────────────────────────────────────────────────
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.11.0
+# flake8>=6.1.0
+# mypy>=1.7.0
