@@ -23,7 +23,7 @@ HybridChunker = None
 def _ensure_docling_loaded():
     """Stelle sicher, dass Docling und docling-core geladen sind."""
     global DOCLING_AVAILABLE, DOCLING_CORE_AVAILABLE, DocumentConverter, DoclingDocument, HybridChunker
-    if DOCLING_AVAILABLE or DocumentConverter is not None:
+    if DOCLING_AVAILABLE and DocumentConverter is not None:
         return
     try:
         from docling.document_converter import DocumentConverter as _DC
@@ -40,12 +40,13 @@ def _ensure_docling_loaded():
             DOCLING_CORE_AVAILABLE = True
             _LOGGER.info("Docling-core erfolgreich geladen")
         except Exception as e:
-            _LOGGER.debug(f"Docling-core optionale Features nicht verfügbar: {e}")
+            _LOGGER.warning(f"Docling-core optionale Features nicht verfügbar: {e}")
             DOCLING_CORE_AVAILABLE = False
     except Exception as e:
-        _LOGGER.debug(f"Docling Import fehlgeschlagen: {e}")
+        _LOGGER.warning(f"Docling Import fehlgeschlagen: {e}")
         DOCLING_AVAILABLE = False
         DOCLING_CORE_AVAILABLE = False
+        raise ImportError(f"Docling nicht verfügbar: {e}")
 
 try:
     import date_parser  # type: ignore

@@ -103,8 +103,12 @@ app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config["DEBUG"] = DEBUG_MODE
 
 # Registriere Review-Blueprint
-from app.review_routes import review_bp
-app.register_blueprint(review_bp)
+try:
+    from review_routes import review_bp
+    app.register_blueprint(review_bp)
+except ImportError as e:
+    logger.warning(f"Review-Routes nicht geladen: {e}")
+
 
 
 
@@ -188,11 +192,30 @@ def status_json():
 @app.post("/analyze_docling")
 def analyze_docling():
     """Analysiert hochgeladene PDF mit Docling für Vorschau."""
+    import signal
+    from contextlib import contextmanager
+    
+    @contextmanager
+    def timeout_context(seconds):
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Docling-Analyse überschritt {seconds}s Timeout")
+        
+        if hasattr(signal, 'SIGALRM'):
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(seconds)
+            try:
+                yield
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        else:
+            yield
+    
     try:
         if not is_docling_available():
             return jsonify({
                 "ok": False,
-                "error": "Docling ist nicht installiert"
+                "error": "Docling ist nicht installiert. Installiere mit: pip install docling"
             }), 400
         
         uploaded = request.files.getlist("files")
@@ -206,7 +229,15 @@ def analyze_docling():
                 "error": "Keine Dateien hochgeladen"
             }), 400
         
-        extractor = get_docling_extractor()
+        try:
+            extractor = get_docling_extractor()
+        except Exception as e:
+            logger.error(f"Docling Extractor Init fehlgeschlagen: {e}")
+            return jsonify({
+                "ok": False,
+                "error": f"Docling nicht verfügbar: {str(e)}"
+            }), 500
+        
         if not extractor:
             return jsonify({
                 "ok": False,
@@ -224,33 +255,47 @@ def analyze_docling():
                 continue
             
             temp_path = TMP_DIR / f"docling_temp_{uuid4().hex}.pdf"
-            storage.save(temp_path)
-            
             try:
-                # Extrahiere Informationen mit Docling
-                text = extractor.extract_text(temp_path)
-                metadata = extractor.extract_metadata(temp_path)
-                tables = extractor.extract_tables(temp_path)
-                supplier = extractor.extract_supplier(temp_path)
-                date = extractor.extract_date(temp_path, supplier)
-                
+                storage.save(temp_path)
+            except Exception as e:
+                logger.error(f"Fehler beim Speichern von {safe_name}: {e}")
                 results.append({
                     "filename": safe_name,
-                    "text": text[:500] + "..." if len(text) > 500 else text,
-                    "text_length": len(text),
-                    "metadata": metadata,
-                    "tables_found": len(tables),
-                    "supplier": supplier,
-                    "date": date.isoformat() if date else None,
+                    "error": f"Upload fehlgeschlagen: {str(e)}"
+                })
+                continue
+            
+            try:
+                # Timeout für lange Docling-Verarbeitung
+                with timeout_context(30):
+                    text = extractor.extract_text(temp_path)
+                    metadata = extractor.extract_metadata(temp_path)
+                    tables = extractor.extract_tables(temp_path)
+                    supplier = extractor.extract_supplier(temp_path)
+                    date = extractor.extract_date(temp_path, supplier)
+                    
+                    results.append({
+                        "filename": safe_name,
+                        "text": text[:500] + "..." if len(text) > 500 else text,
+                        "text_length": len(text),
+                        "metadata": metadata,
+                        "tables_found": len(tables),
+                        "supplier": supplier,
+                        "date": date.isoformat() if date else None,
+                    })
+            except TimeoutError as e:
+                logger.error(f"Timeout bei Docling-Analyse von {safe_name}")
+                results.append({
+                    "filename": safe_name,
+                    "error": "Verarbeitung zu langsam (Timeout)"
                 })
             except Exception as e:
-                logger.error(f"Fehler bei Docling-Analyse von {safe_name}: {e}")
+                logger.error(f"Fehler bei Docling-Analyse von {safe_name}: {e}", exc_info=True)
                 results.append({
                     "filename": safe_name,
                     "error": str(e)
                 })
             finally:
-                # Cleanup
                 try:
                     temp_path.unlink(missing_ok=True)
                 except Exception:
@@ -266,7 +311,7 @@ def analyze_docling():
         _log_exception("analyze_docling:handler", exc)
         return jsonify({
             "ok": False,
-            "error": str(exc)
+            "error": f"Unerwarteter Fehler: {str(exc)}"
         }), 500
 
 
