@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 import sys
+import atexit
 import zipfile
 import json
 import re
@@ -48,9 +49,37 @@ from core.extractor import (
     build_new_filename,
     INTERNAL_DATE_FORMAT,
 )
-from core.docling_extractor import is_docling_available, get_extractor as get_docling_extractor
+
+# Lazy-Loading für Docling (nur bei Bedarf laden)
+def is_docling_available():
+    """Prüft ob Docling verfügbar ist ohne es zu laden."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("docling")
+        return spec is not None
+    except Exception:
+        return False
+
+def get_docling_extractor():
+    """Lädt Docling-Extractor lazy (nur wenn benötigt)."""
+    try:
+        from core.docling_extractor import DoclingExtractor
+        return DoclingExtractor()
+    except Exception as e:
+        logger.error(f"Docling-Extractor konnte nicht geladen werden: {e}")
+        return None
 from utils import normalize_text
 from config import Config
+from services.auto_sort import (
+    AutoSortSettings,
+    decide_auto_sort,
+    export_document,
+    load_settings as load_auto_sort_settings,
+    save_settings as save_auto_sort_settings,
+    sanitize_supplier_name,
+)
+from core.runtime_state import RuntimeStateConfig, reset_runtime_state
+from services.web_auth import install_auth
 
 config = Config()
 DATA_DIR = config.DATA_DIR
@@ -58,15 +87,85 @@ INBOX_DIR = config.INBOX_DIR
 OUT_DIR = config.OUT_DIR
 TMP_DIR = config.TMP_DIR
 QUARANTINE_DIR = getattr(config, "QUARANTINE_DIR", (DATA_DIR / "quarantaene"))
+LOG_DIR = getattr(config, "LOG_DIR", (DATA_DIR / "logs"))
 SUPPLIER_CORRECTIONS_PATH = config.SUPPLIER_CORRECTIONS_PATH
 SESSION_FILES_PATH = config.SESSION_FILES_PATH
 SESSION_FILES_LOCK = config.SESSION_FILES_LOCK
 HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 
+# Stateless: Beim Start immer Runtime-State löschen (keine Dokument-/Dashboard-Persistenz)
+reset_runtime_state(
+    RuntimeStateConfig(
+        repo_root=BASE_DIR,
+        data_dir=DATA_DIR,
+        runtime_dirs=(TMP_DIR, INBOX_DIR, OUT_DIR, QUARANTINE_DIR),
+        runtime_files=(
+            SESSION_FILES_PATH,
+            SESSION_FILES_LOCK,
+            SUPPLIER_CORRECTIONS_PATH,
+            HISTORY_PATH,
+            config.SETTINGS_PATH,
+        ),
+        log_dir=LOG_DIR,
+        preserve_dirs=(BASE_DIR / "ml", config.AUTH_DIR),
+    )
+)
+
+
+@atexit.register
+def _cleanup_runtime_state_on_exit() -> None:
+    # Best-effort Cleanup beim Shutdown (Start-Reset ist die Hauptgarantie)
+    try:
+        reset_runtime_state(
+            RuntimeStateConfig(
+                repo_root=BASE_DIR,
+                data_dir=DATA_DIR,
+                runtime_dirs=(TMP_DIR,),
+                runtime_files=(),
+                log_dir=LOG_DIR,
+                preserve_dirs=(BASE_DIR / "ml", config.AUTH_DIR),
+            )
+        )
+    except Exception:
+        pass
+
 # Quarantäne-Schwellen: unsicher, wenn darunter (oder wenn Datum/Lieferant fehlt)
 QUARANTINE_SUPPLIER_CONF_MIN = float(os.getenv("DOCARO_QUAR_SUPPLIER_MIN", "0.85"))
 QUARANTINE_DATE_CONF_MIN = float(os.getenv("DOCARO_QUAR_DATE_MIN", "0.75"))
+
+# Auto-Sort Settings (persisted in data/settings.json)
+AUTO_SORT_SETTINGS: Optional[AutoSortSettings] = None
+
+
+def _default_auto_sort_settings() -> AutoSortSettings:
+    return AutoSortSettings(
+        enabled=config.AUTO_SORT_ENABLED_DEFAULT,
+        base_dir=config.AUTO_SORT_BASE_DIR_DEFAULT,
+        folder_format=config.AUTO_SORT_FOLDER_FORMAT_DEFAULT,
+        mode=config.AUTO_SORT_MODE_DEFAULT,
+        confidence_threshold=config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT,
+        fallback_folder=config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT,
+    )
+
+
+def _get_auto_sort_settings(refresh: bool = False) -> AutoSortSettings:
+    global AUTO_SORT_SETTINGS
+    if refresh or AUTO_SORT_SETTINGS is None:
+        AUTO_SORT_SETTINGS = load_auto_sort_settings(config.SETTINGS_PATH, _default_auto_sort_settings())
+        base_dir_path = Path(AUTO_SORT_SETTINGS.base_dir).expanduser()
+        try:
+            base_dir_path = base_dir_path.resolve()
+        except OSError:
+            pass
+        AUTO_SORT_SETTINGS.base_dir = base_dir_path
+    return AUTO_SORT_SETTINGS
+
+
+def _save_auto_sort_settings(settings: AutoSortSettings) -> None:
+    global AUTO_SORT_SETTINGS
+    AUTO_SORT_SETTINGS = settings
+    save_auto_sort_settings(config.SETTINGS_PATH, settings)
 
 try:
     import msvcrt  # type: ignore
@@ -104,10 +203,21 @@ app.config["DEBUG"] = DEBUG_MODE
 
 # Registriere Review-Blueprint
 try:
+    import sys
+    from pathlib import Path
+    app_dir = Path(__file__).parent
+    if str(app_dir) not in sys.path:
+        sys.path.insert(0, str(app_dir))
     from review_routes import review_bp
     app.register_blueprint(review_bp)
+    logger.info("Review-Routes erfolgreich registriert")
 except ImportError as e:
     logger.warning(f"Review-Routes nicht geladen: {e}")
+
+# Auth installieren (Login-Pflicht). Registrierung ist deaktiviert; User nur via Seed/Admin.
+seed_email = getattr(config, "SEED_EMAIL_DEFAULT", "g.machuletz@bracht-autokrane.de")
+seed_password = os.getenv("DOCARO_SEED_PASSWORD")
+install_auth(app, config.AUTH_DB_PATH, seed_email=seed_email, seed_password=seed_password)
 
 
 
@@ -173,6 +283,94 @@ def index():
     )
 
 
+@app.get("/settings")
+def settings_page():
+    settings = _get_auto_sort_settings()
+    
+    # Review Settings laden
+    try:
+        from core.review_service import load_review_settings
+        review_settings = load_review_settings(config.DATA_DIR / "settings.json")
+        # Merge in settings object
+        settings.gate_supplier_min = review_settings.gate_supplier_min
+        settings.gate_date_min = review_settings.gate_date_min
+        settings.gate_doc_type_min = review_settings.gate_doc_type_min
+        settings.gate_doc_number_min = review_settings.gate_doc_number_min
+        settings.auto_finalize_enabled = review_settings.auto_finalize_enabled
+    except Exception as exc:
+        _LOGGER.warning(f"Failed to load review settings: {exc}")
+        # Defaults
+        settings.gate_supplier_min = 0.80
+        settings.gate_date_min = 0.80
+        settings.gate_doc_type_min = 0.70
+        settings.gate_doc_number_min = 0.80
+        settings.auto_finalize_enabled = False
+    
+    return render_template("settings.html", settings=settings)
+
+
+@app.post("/settings")
+def settings_save():
+    form = request.form
+    enabled = form.get("auto_sort_enabled") == "1"
+    base_dir_raw = form.get("base_dir", "").strip() or str(config.OUT_DIR)
+    base_dir = Path(base_dir_raw).expanduser()
+    if not base_dir.is_absolute():
+        base_dir = (BASE_DIR / base_dir).resolve()
+    folder_format = form.get("folder_format", "A").upper()
+    if folder_format not in ("A", "B", "C"):
+        folder_format = "A"
+    mode = form.get("mode", "move").lower()
+    if mode not in ("move", "copy"):
+        mode = "move"
+    try:
+        conf_raw = str(
+            form.get("confidence_threshold", config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT)
+        ).strip()
+        confidence_threshold = float(conf_raw.replace(",", "."))
+    except ValueError:
+        confidence_threshold = config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT
+    fallback_folder = form.get("fallback_folder", config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT).strip() or config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT
+    fallback_folder = sanitize_supplier_name(fallback_folder)
+
+    settings = AutoSortSettings(
+        enabled=enabled,
+        base_dir=base_dir,
+        folder_format=folder_format,
+        mode=mode,
+        confidence_threshold=confidence_threshold,
+        fallback_folder=fallback_folder,
+    )
+    _save_auto_sort_settings(settings)
+    
+    # Review Queue Settings speichern
+    try:
+        from core.review_service import ReviewSettings, save_review_settings
+        
+        auto_finalize_enabled = form.get("auto_finalize_enabled") == "1"
+        gate_supplier_min = float(form.get("gate_supplier_min", "0.80"))
+        gate_date_min = float(form.get("gate_date_min", "0.80"))
+        gate_doc_type_min = float(form.get("gate_doc_type_min", "0.70"))
+        gate_doc_number_min = float(form.get("gate_doc_number_min", "0.80"))
+        
+        review_settings = ReviewSettings(
+            gate_supplier_min=gate_supplier_min,
+            gate_date_min=gate_date_min,
+            gate_doc_type_min=gate_doc_type_min,
+            gate_doc_number_min=gate_doc_number_min,
+            auto_finalize_enabled=auto_finalize_enabled,
+            autosort_enabled=enabled,
+            autosort_base_dir=base_dir
+        )
+        
+        save_review_settings(config.DATA_DIR / "settings.json", review_settings)
+    except Exception as exc:
+        _LOGGER.warning(f"Failed to save review settings: {exc}")
+    
+    flash("Einstellungen gespeichert.")
+    return redirect(url_for("settings_page"))
+
+
 @app.get("/status.json")
 def status_json():
     try:
@@ -192,6 +390,12 @@ def status_json():
 @app.post("/analyze_docling")
 def analyze_docling():
     """Analysiert hochgeladene PDF mit Docling für Vorschau."""
+    # TEMPORÄR DEAKTIVIERT - Docling-Import verursacht Server-Crash
+    return jsonify({
+        "ok": False,
+        "error": "Docling-Analyse vorübergehend deaktiviert (Server-Stabilitätsprobleme)"
+    }), 503
+    
     import signal
     from contextlib import contextmanager
     
@@ -625,6 +829,39 @@ def _background_process_folder(
         # IDs und Session-Mapping werden in der Index-Route gesetzt.
         results = _apply_result_flags(results)
         results = _apply_quarantine(results)
+        
+        # Auto-Sortierung direkt nach Verarbeitung (wenn aktiviert)
+        settings = _get_auto_sort_settings()
+        if results:
+            for item in results:
+                _ensure_auto_sort_fields(item)
+                decision = decide_auto_sort(item, settings)
+                item["auto_sort_reason_code"] = decision.reason_code
+                item["auto_sort_details"] = decision.details
+                if not settings.enabled:
+                    item["auto_sort_status"] = "skipped"
+                    item["auto_sort_reason"] = f"Nicht sortiert: {decision.reason_code}"
+                    continue
+
+                out_name = item.get("out_name") or ""
+                if not out_name or item.get("quarantined"):
+                    continue
+                pdf_path = resolve_pdf_path(out_name)
+                if pdf_path and pdf_path.exists():
+                    try:
+                        export_result = export_document(pdf_path, item, settings)
+                        if export_result.path:
+                            item["export_path"] = str(export_result.path)
+                        item["auto_sort_status"] = export_result.status
+                        item["auto_sort_reason"] = export_result.reason
+                        item["auto_sort_reason_code"] = getattr(export_result, "reason_code", "") or decision.reason_code
+                        item["auto_sort_details"] = getattr(export_result, "details", None) or decision.details
+                    except Exception as exc:
+                        logger.warning(f"Auto-sort failed for {out_name}: {exc}")
+                        item["auto_sort_status"] = "failed"
+                        item["auto_sort_reason"] = str(exc)
+                        item["auto_sort_reason_code"] = "AUTOSORT_EXCEPTION"
+        
         _save_last_results(results)
     except Exception as exc:
         _log_exception(log_context, exc)
@@ -653,7 +890,10 @@ def _load_last_results():
         results = json.loads(results_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
-    return _apply_supplier_corrections(results)
+    results = _apply_supplier_corrections(results)
+    for item in results or []:
+        _ensure_auto_sort_fields(item)
+    return results
 
 
 def _load_session_files() -> dict:
@@ -777,10 +1017,19 @@ def _is_supplier_broken(supplier_valAe: Optional[str]) -> bool:
     return False
 
 
+def _ensure_auto_sort_fields(item: dict) -> None:
+    item.setdefault("auto_sort_status", "")
+    item.setdefault("auto_sort_reason", "")
+    item.setdefault("auto_sort_reason_code", "")
+    item.setdefault("auto_sort_details", {})
+    item.setdefault("export_path", "")
+
+
 def _apply_result_flags(results):
     if results is None:
         return results
     for item in results:
+        _ensure_auto_sort_fields(item)
         parsing_failed = bool(item.get("parsing_failed"))
         date_valAe = item.get("date")
         supplier_valAe = item.get("supplier")
@@ -806,8 +1055,14 @@ def _row_payload(file_id: str, message: str = "") -> dict:
         "supplier": result.get("supplier") or "",
         "supplier_source": result.get("supplier_source") or "",
         "supplier_confidence": result.get("supplier_confidence") or "",
+        "supplier_candidates": result.get("supplier_candidates") or [],
         "date": result.get("date") or "",
         "date_confidence": result.get("date_confidence") or "",
+        "doc_type": result.get("doc_type") or "",
+        "doc_type_confidence": result.get("doc_type_confidence") or "",
+        "doc_type_evidence": result.get("doc_type_evidence") or "",
+        "doc_type_scores": result.get("doc_type_scores") or {},
+        "doc_type_evidence_by_type": result.get("doc_type_evidence_by_type") or {},
         "error": result.get("error") or "",
         "tesseract_status": result.get("tesseract_status") or "",
         "poppler_status": result.get("poppler_status") or "",
@@ -819,6 +1074,11 @@ def _row_payload(file_id: str, message: str = "") -> dict:
         "quarantined": bool(result.get("quarantined")),
         "supplier_missing": bool(result.get("supplier_missing")),
         "date_missing": bool(result.get("date_missing")),
+        "auto_sort_status": result.get("auto_sort_status") or "",
+        "auto_sort_reason": result.get("auto_sort_reason") or "",
+        "auto_sort_reason_code": result.get("auto_sort_reason_code") or "",
+        "auto_sort_details": result.get("auto_sort_details") or {},
+        "export_path": result.get("export_path") or "",
         "needs_review": bool(result.get("needs_review")),
         "message": message,
     }
@@ -979,6 +1239,15 @@ def confirm_supplier():
                 pdf_path = synced_path
                 if pdf_path.name != new_name:
                     new_name = pdf_path.name
+
+        # Auto-Sort nach manueller Korrektur nachholen
+        try:
+            settings = _get_auto_sort_settings()
+            current = _result_for_file_id(file_id) or {}
+            if settings.enabled and not bool(current.get("quarantined")) and pdf_path and pdf_path.exists():
+                _auto_sort_pdf(current, pdf_path)
+        except Exception as exc:
+            logger.warning(f"Auto-sort after confirm_supplier failed: {exc}")
         corrections = _load_supplier_corrections()
         corrections[file_id] = supplier_name
         _save_supplier_corrections(corrections)
@@ -1099,6 +1368,12 @@ def resolve_pdf_path(filename: str) -> Optional[Path]:
         candidates.append(safe_name)
     if not candidates:
         return None
+    result = _result_for_filename(filename) or {}
+    export_path_val = (result.get("export_path") or "").strip()
+    if export_path_val:
+        export_path = Path(export_path_val)
+        if export_path.exists() and _is_allowed_pdf_path(export_path):
+            return export_path
     # Search known roots first; deep scan is optional for performance reasons.
     roots = _allowed_roots()
     for root in roots:
@@ -1118,7 +1393,7 @@ def resolve_pdf_path(filename: str) -> Optional[Path]:
 
 
 def _allowed_roots() -> list[Path]:
-    return [
+    roots = [
         TMP_DIR,
         INBOX_DIR,
         OUT_DIR,
@@ -1127,6 +1402,21 @@ def _allowed_roots() -> list[Path]:
         BASE_DIR / "daten_eingang",
         BASE_DIR / "daten_fertig",
     ]
+    try:
+        auto_settings = _get_auto_sort_settings()
+        if auto_settings and auto_settings.base_dir:
+            roots.append(Path(auto_settings.base_dir))
+    except Exception:
+        pass
+    # Remove duplicates while preserving order
+    unique_roots = []
+    seen = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            unique_roots.append(root)
+            seen.add(key)
+    return unique_roots
 
 
 def _parse_conf(value: object) -> float:
@@ -1218,6 +1508,12 @@ def _resolve_file_path(file_id: str) -> Optional[Path]:
         if filename:
             tried.add(filename)
     result = _result_for_file_id(file_id) or {}
+    export_path_val = (result.get("export_path") or "").strip()
+    if export_path_val:
+        export_path = Path(export_path_val)
+        if export_path.exists() and _is_allowed_pdf_path(export_path):
+            _set_session_file_entry(file_id, export_path, export_path.name)
+            return export_path
     for key in ("out_name", "filename", "original", "original_name"):
         valAe = result.get(key) or ""
         if valAe:
@@ -1375,6 +1671,51 @@ def _sync_pdf_location(file_id: str, pdf_path: Path) -> Tuple[Optional[Path], st
     if desired_name and target_path.name != desired_name:
         _update_last_results_out_name(file_id, target_path.name)
     return target_path, ""
+
+
+def _update_auto_sort_metadata(
+    file_id: str,
+    out_name: str,
+    export_path: Optional[Path],
+    status: str,
+    reason: str,
+    reason_code: str = "",
+    details: Optional[dict] = None,
+) -> None:
+    results = _load_last_results() or []
+    for item in results:
+        if (file_id and item.get("file_id") == file_id) or (out_name and item.get("out_name") == out_name):
+            _ensure_auto_sort_fields(item)
+            item["auto_sort_status"] = status or ""
+            item["auto_sort_reason"] = reason or ""
+            item["auto_sort_reason_code"] = reason_code or ""
+            item["auto_sort_details"] = details or {}
+            if export_path:
+                item["export_path"] = str(export_path)
+            break
+    _save_last_results(results)
+
+
+def _auto_sort_pdf(result: dict, pdf_path: Path) -> Tuple[Path, str, str]:
+    settings = _get_auto_sort_settings()
+    export_result = export_document(pdf_path, result, settings)
+    target_path = export_result.path or pdf_path
+    status = export_result.status
+    reason = export_result.reason
+    file_id = result.get("file_id") or ""
+    out_name = result.get("out_name") or pdf_path.name
+    _update_auto_sort_metadata(
+        file_id,
+        out_name,
+        export_result.path,
+        status,
+        reason,
+        reason_code=getattr(export_result, "reason_code", "") or "",
+        details=getattr(export_result, "details", None),
+    )
+    if file_id and export_result.path:
+        _set_session_file_entry(file_id, export_result.path, export_result.path.name)
+    return target_path, status, reason
 
 
 def _set_result_error(file_id: str, message: str) -> None:
@@ -1546,6 +1887,15 @@ def confirm_date_from_view():
 
     if target_path and target_path.name != filename:
         flash(f"Umbenannt zu: {target_path.name}")
+
+    # Auto-Sort nach manueller Korrektur nachholen
+    try:
+        settings = _get_auto_sort_settings()
+        current = _result_for_file_id(file_id) or {}
+        if settings.enabled and not bool(current.get("quarantined")) and target_path and target_path.exists():
+            _auto_sort_pdf(current, target_path)
+    except Exception as exc:
+        logger.warning(f"Auto-sort after confirm_date_from_view failed: {exc}")
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -1619,6 +1969,15 @@ def confirm_date():
     message = "Datum gespeichert."
     if target_path and target_path.name != filename:
         message = f"Umbenannt zu: {target_path.name}"
+
+    # Auto-Sort nach manueller Korrektur nachholen
+    try:
+        settings = _get_auto_sort_settings()
+        current = _result_for_file_id(file_id) or {}
+        if settings.enabled and not bool(current.get("quarantined")) and target_path and target_path.exists():
+            _auto_sort_pdf(current, target_path)
+    except Exception as exc:
+        logger.warning(f"Auto-sort after confirm_date failed: {exc}")
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -1885,10 +2244,43 @@ def download(filename: str):
         abort(404)
     if safe_name not in _session_filenames():
         abort(404)
-    pdf_path = resolve_pdf_path(safe_name)
+
+    result = _result_for_filename(safe_name) or {}
+    file_id = result.get("file_id") or ""
+
+    pdf_path = None
+    export_path_val = (result.get("export_path") or "").strip()
+    if export_path_val:
+        candidate = Path(export_path_val)
+        if candidate.exists():
+            pdf_path = candidate
+
+    if not pdf_path:
+        pdf_path = resolve_pdf_path(safe_name)
     if not pdf_path:
         abort(404)
-    return send_file(pdf_path, as_attachment=True, download_name=safe_name)
+
+    # Auto-Sort sollte bereits nach Verarbeitung erfolgt sein
+    # Falls nicht (z.B. alte Dateien), hier nachholen
+    settings = _get_auto_sort_settings()
+    if result and settings.enabled and (not export_path_val or not Path(export_path_val).exists()):
+        try:
+            pdf_path, auto_status, auto_reason = _auto_sort_pdf(result, pdf_path)
+        except Exception as exc:
+            logger.warning(f"Auto-sort on download failed: {exc}")
+    
+    if file_id and pdf_path:
+        _set_session_file_entry(file_id, pdf_path, pdf_path.name)
+    download_name = pdf_path.name if pdf_path else safe_name
+    resp = send_file(pdf_path, as_attachment=True, download_name=download_name)
+    try:
+        # Meta für Clients (z.B. Debug/Automatisierung)
+        current = _result_for_filename(safe_name) or {}
+        resp.headers["X-Docaro-AutoSort-Reason"] = str(current.get("auto_sort_reason_code") or current.get("auto_sort_reason") or "")
+        resp.headers["X-Docaro-Final-Path"] = str(current.get("export_path") or str(pdf_path) or "")
+    except Exception:
+        pass
+    return resp
 
 
 @app.get("/download_all.zip")

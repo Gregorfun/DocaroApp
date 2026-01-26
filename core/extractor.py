@@ -30,11 +30,35 @@ except ImportError:
     except ImportError:
         date_parser = None
 
+try:
+    from core.doc_number_extractor import extract_doc_number, generate_fallback_identifier
+except ImportError:
+    extract_doc_number = None
+    generate_fallback_identifier = None
+
+try:
+    from core.supplier_canonicalizer import canonicalize_supplier
+except ImportError:
+    canonicalize_supplier = None
+
+try:
+    from core.doctype_classifier import classify_doc_type
+except ImportError:
+    classify_doc_type = None
+
+try:
+    from core.review_service import decide_review_status, load_review_settings, DocumentStatus
+except ImportError:
+    decide_review_status = None
+    load_review_settings = None
+    DocumentStatus = None
+
 from config import Config
 
 config = Config()
 from constants import DATE_REGEX_PATTERNS, LABEL_PATTERNS, LABEL_PRIORITY, DATE_LABELS
 from utils import first_path_from_env, has_pdfinfo
+from core.text_segments import segment_text
 
 def normalize_text(text: str) -> str:
     """Normalisiert Text für OCR: Entfernt überflüssige Leerzeichen und Zeilenumbrüche."""
@@ -369,23 +393,113 @@ DELIVERY_NOTE_KEYWORDS = [
     "lieferschein nr",
 ]
 
+ORDER_KEYWORDS = [
+    "auftragsnummer",
+    "auftrag nr",
+    "auftrag-nr",
+    "auftrag",
+    "bestellnummer",
+    "bestellung",
+    "order no",
+    "order",
+]
+
+_DOCNO_TOKEN = re.compile(r"\b([A-Z0-9][A-Z0-9\-/]{2,})\b", re.IGNORECASE)
+_DATE_LIKE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b")
+_IBAN_LIKE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
+_PHONE_LIKE = re.compile(r"\b\+?\d[\d /()\-]{6,}\d\b")
+_AMOUNT_LIKE = re.compile(r"\b\d{1,3}(?:[\.,]\d{3})*(?:[\.,]\d{2})\b")
+
+
+def _clean_doc_number(value: str) -> str:
+    val = (value or "").strip().strip(".:;,")
+    val = re.sub(r"\s+", "", val)
+    return val
+
+
+def _is_plausible_doc_number(token: str, *, allow_5digit_numeric: bool) -> bool:
+    t = _clean_doc_number(token)
+    if not t or len(t) < 4:
+        return False
+    if _DATE_LIKE.search(t):
+        return False
+    if _IBAN_LIKE.search(t):
+        return False
+    if _PHONE_LIKE.search(t):
+        return False
+    if _AMOUNT_LIKE.fullmatch(t):
+        return False
+    if t.isdigit() and len(t) == 5 and not allow_5digit_numeric:
+        # häufig PLZ; ohne Keyword nicht akzeptieren
+        return False
+    if not any(ch.isdigit() for ch in t):
+        return False
+    return True
+
+
+def _find_number_near_keywords(text: str, keywords: list[str]) -> Optional[str]:
+    lines = [ln.strip() for ln in (text or "").splitlines()]
+    for idx, line in enumerate(lines):
+        lower = line.lower()
+        hit = None
+        for kw in keywords:
+            if kw in lower:
+                hit = kw
+                break
+        if not hit:
+            continue
+
+        # 1) gleiche Zeile: nach dem Keyword einen Token suchen
+        try:
+            pos = lower.find(hit)
+        except Exception:
+            pos = -1
+        tail = line[pos + len(hit) :] if pos >= 0 else line
+        for m in _DOCNO_TOKEN.finditer(tail):
+            cand = _clean_doc_number(m.group(1))
+            if _is_plausible_doc_number(cand, allow_5digit_numeric=True):
+                return cand
+
+        # 2) nächste 1–2 Zeilen
+        for j in range(idx + 1, min(idx + 3, len(lines))):
+            for m in _DOCNO_TOKEN.finditer(lines[j]):
+                cand = _clean_doc_number(m.group(1))
+                if _is_plausible_doc_number(cand, allow_5digit_numeric=True):
+                    return cand
+    return None
+
+
+def extract_document_numbers(text: str) -> Dict[str, object]:
+    """Extrahiert Lieferschein-/Auftragsnummer aus Text.
+
+    Priorität: Lieferschein > Auftrag.
+    confidence: "high" (mit Keyword), "low" (heuristisch), "none".
+    """
+
+    combined = text or ""
+    delivery = _find_number_near_keywords(combined, DELIVERY_NOTE_KEYWORDS)
+    if delivery:
+        return {"delivery_note_no": delivery, "order_no": None, "confidence": "high"}
+
+    order_no = _find_number_near_keywords(combined, ORDER_KEYWORDS)
+    if order_no:
+        return {"delivery_note_no": None, "order_no": order_no, "confidence": "high"}
+
+    # Heuristik: erster plausibler Token (ohne Keyword) -> low
+    for m in _DOCNO_TOKEN.finditer(combined):
+        cand = _clean_doc_number(m.group(1))
+        if _is_plausible_doc_number(cand, allow_5digit_numeric=False):
+            return {"delivery_note_no": None, "order_no": cand, "confidence": "low"}
+
+    return {"delivery_note_no": None, "order_no": None, "confidence": "none"}
+
 def extract_delivery_note_number(text: str) -> Optional[str]:
     """
     Extracts the delivery note number from the text.
     Searches for keywords and extracts the following number.
     """
-    for line in text.splitlines():
-        for keyword in DELIVERY_NOTE_KEYWORDS:
-            # Create a regex to find the keyword and capture what follows
-            # This looks for the keyword, then optional non-alphanumeric chars, then captures the number.
-            pattern = re.compile(rf"{re.escape(keyword)}[^a-zA-Z0-9]*([a-zA-Z0-9/\-]+)", re.IGNORECASE)
-            match = pattern.search(line)
-            if match:
-                number = match.group(1)
-                # Basic validation: should be longer than 3 chars and contain a digit.
-                if len(number) > 3 and any(c.isdigit() for c in number):
-                    return number
-    return None
+    found = _find_number_near_keywords(text or "", DELIVERY_NOTE_KEYWORDS)
+    return found
 
 
 
@@ -1442,6 +1556,71 @@ def _detect_supplier_from_db(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _find_supplier_candidates_in_segment(text: str, segment_name: str) -> List[Dict[str, object]]:
+    """Findet Supplier-Kandidaten in einem Segment (header/body/recipient)."""
+    normalized_text = _normalize_supplier_text(text)
+    if not normalized_text:
+        return []
+
+    candidates: List[Dict[str, object]] = []
+
+    # DB Hits
+    db_hit = _detect_supplier_from_db(text)
+    if db_hit:
+        supplier_name, alias = db_hit
+        candidates.append(
+            {
+                "canonical": _canonicalize_supplier(supplier_name),
+                "confidence": 0.90,
+                "source": "db",
+                "matched": alias,
+                "segment": segment_name,
+            }
+        )
+
+    # Keyword-Hits (inkl. Vergoelst)
+    keyword_candidates = list(SUPPLIER_KEYWORDS.items())
+    keyword_candidates.extend((alias, "Vergoelst") for alias in VERGOELST_ALIASES)
+    # KSR hard aliases
+    keyword_candidates.extend(
+        [
+            ("ksr", "KSR"),
+            ("ksr logistic", "KSR"),
+            ("ksr recycling", "KSR"),
+            ("ksr gmbh", "KSR"),
+        ]
+    )
+
+    for keyword, shortname in keyword_candidates:
+        normalized_keyword = _normalize_supplier_text(keyword)
+        if not normalized_keyword:
+            continue
+        if normalized_keyword in normalized_text:
+            candidates.append(
+                {
+                    "canonical": _canonicalize_supplier(shortname),
+                    "confidence": 0.95,
+                    "source": "keywords",
+                    "matched": keyword,
+                    "segment": segment_name,
+                }
+            )
+
+    # Regex for KSR variants
+    if re.search(r"\bksr\s*(logistic|recycling)?\b", normalized_text, flags=re.IGNORECASE):
+        candidates.append(
+            {
+                "canonical": "KSR",
+                "confidence": 0.92,
+                "source": "regex",
+                "matched": "ksr( logistic| recycling)?",
+                "segment": segment_name,
+            }
+        )
+
+    return candidates
+
+
 def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     top_lines = lines[:40]
@@ -1524,37 +1703,134 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
 
 
 def detect_supplier(text: str) -> Tuple[str, float, str, str]:
-    normalized_text = _normalize_supplier_text(text)
-    normalized_head = normalized_text[: max(1, int(len(normalized_text) * 0.25))] if normalized_text else ""
-    db_hit = _detect_supplier_from_db(text)
-    if db_hit:
-        supplier_name, alias = db_hit
-        supplier_name = _canonicalize_supplier(supplier_name)
-        normalized_alias = _normalize_supplier_text(alias)
-        confidence = 0.90
-        if normalized_alias and normalized_alias in normalized_head:
-            confidence = min(confidence + 0.1, 1.0)
-        return supplier_name, confidence, "db", alias
+    supplier, confidence, source, guess, _cands = detect_supplier_detailed(text)
+    return supplier, confidence, source, guess
 
-    keyword_candidates = list(SUPPLIER_KEYWORDS.items())
-    keyword_candidates.extend((alias, "Vergoelst") for alias in VERGOELST_ALIASES)
-    for keyword, shortname in keyword_candidates:
-        normalized_keyword = _normalize_supplier_text(keyword)
-        if not normalized_keyword:
-            continue
-        if normalized_keyword in normalized_text:
-            shortname = _canonicalize_supplier(shortname)
-            confidence = 0.95
-            if normalized_keyword in normalized_head:
-                confidence = min(confidence + 0.1, 1.0)
-            return shortname, confidence, "keywords", keyword
 
-    guess, guess_line, confidence = _heuristic_supplier(text)
+def detect_supplier_detailed(
+    text: str,
+    doc_type_hint: Optional[str] = None,
+) -> Tuple[str, float, str, str, List[Dict[str, object]]]:
+    """Supplier-Erkennung mit Segmentierung und Kandidatenliste.
+
+    Returns:
+        (supplier, confidence, source, guess_line, candidates)
+    """
+
+    segmented = segment_text(text, header_max_lines=40, recipient_max_lines=20)
+    header_text = "\n".join(segmented.header_lines)
+    body_text = "\n".join(segmented.body_lines)
+    recipient_text = "\n".join(segmented.recipient_lines)
+
+    # Segmentgewichtung: header > body >> recipient
+    segment_multiplier = {"header": 1.0, "body": 0.85, "recipient": 0.20, "role": 0.95}
+
+    candidates: List[Dict[str, object]] = []
+    candidates.extend(_find_supplier_candidates_in_segment(header_text, "header"))
+    candidates.extend(_find_supplier_candidates_in_segment(body_text, "body"))
+    candidates.extend(_find_supplier_candidates_in_segment(recipient_text, "recipient"))
+
+    # ÜBERNAHMESCHEIN: Rollenblöcke priorisieren (Beförderer/Abfallentsorger)
+    try:
+        if (doc_type_hint or "").strip().upper() == "ÜBERNAHMESCHEIN":
+            def _extract_role_block_local(marker: str, max_lines: int = 20) -> str:
+                lines = [ln.rstrip() for ln in (text or "").splitlines()]
+                if not lines:
+                    return ""
+                marker_norm = _normalize_supplier_text(marker)
+                for idx, ln in enumerate(lines):
+                    if marker_norm and marker_norm in _normalize_supplier_text(ln):
+                        out: list[str] = [ln]
+                        taken = 0
+                        j = idx + 1
+                        while j < len(lines) and taken < max_lines:
+                            if not (lines[j] or "").strip():
+                                break
+                            out.append(lines[j])
+                            taken += 1
+                            j += 1
+                        return "\n".join(out)
+                return ""
+
+            role_texts = [
+                _extract_role_block_local("Beförderer (Name, Anschrift)"),
+                _extract_role_block_local("Befoerderer (Name, Anschrift)"),
+                _extract_role_block_local("Abfallentsorger (Name, Anschrift)"),
+                _extract_role_block_local("Abfallentsorger"),
+            ]
+            role_joined = "\n".join([t for t in role_texts if t])
+            role_norm = _normalize_supplier_text(role_joined)
+            if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE):
+                candidates.append(
+                    {
+                        "canonical": "KSR",
+                        "confidence": 0.99,
+                        "source": "role_block",
+                        "matched": "Beförderer/Abfallentsorger",
+                        "segment": "role",
+                    }
+                )
+    except Exception:
+        pass
+
+    # Hard Fix Liebherr: nur wenn im Header/Letterhead (nicht Recipient-only)
+    header_norm = _normalize_supplier_text(header_text)
+    if (
+        "liebherr" in header_norm
+        or "liebherr werk" in header_norm
+        or "werk ehingen" in header_norm
+        or "www.liebherr.com" in header_norm
+    ):
+        candidates.append(
+            {
+                "canonical": "Liebherr",
+                "confidence": 0.98,
+                "source": "hardfix",
+                "matched": "Liebherr(header)",
+                "segment": "header",
+            }
+        )
+
+    # Heuristik nur auf header/body, nicht auf recipient
+    guess, guess_line, guess_conf = _heuristic_supplier(header_text + "\n" + body_text)
     if guess:
-        guess = _canonicalize_supplier(guess)
-        return guess, confidence, "heuristic", guess_line or ""
+        candidates.append(
+            {
+                "canonical": _canonicalize_supplier(guess),
+                "confidence": float(guess_conf or 0.0),
+                "source": "heuristic",
+                "matched": guess_line or guess,
+                "segment": "header" if _normalize_supplier_text(guess_line or "") in header_norm else "body",
+            }
+        )
 
-    return "Unbekannt", 0.0, "none", ""
+    # Apply segment penalty
+    for c in candidates:
+        seg = str(c.get("segment") or "body")
+        base = float(c.get("confidence") or 0.0)
+        c["confidence"] = round(base * segment_multiplier.get(seg, 0.85), 4)
+
+    # Deduplicate by canonical+segment+source+matched, keep max confidence
+    dedup: Dict[tuple, Dict[str, object]] = {}
+    for c in candidates:
+        key = (c.get("canonical"), c.get("segment"), c.get("source"), c.get("matched"))
+        if key not in dedup or float(c.get("confidence") or 0.0) > float(dedup[key].get("confidence") or 0.0):
+            dedup[key] = c
+    candidates = list(dedup.values())
+
+    # Pick best candidate
+    candidates.sort(key=lambda x: float(x.get("confidence") or 0.0), reverse=True)
+    top = candidates[0] if candidates else None
+    if top and str(top.get("canonical") or ""):
+        return (
+            str(top.get("canonical")),
+            float(top.get("confidence") or 0.0),
+            str(top.get("source") or "none"),
+            str(top.get("matched") or ""),
+            candidates[:3],
+        )
+
+    return "Unbekannt", 0.0, "none", "", candidates[:3]
 
 
 def _ocr_date_crop(image, crop_box: Tuple[int, int, int, int]) -> str:
@@ -1685,7 +1961,7 @@ def get_unique_path(target_dir: Path, filename: str) -> Path:
     while candidate.exists():
         stem = Path(filename).stem
         suffix = Path(filename).suffix
-        candidate = target_dir / f"{stem}_{counter}{suffix}"
+        candidate = target_dir / f"{stem}_{counter:02d}{suffix}"
         counter += 1
     return candidate
 
@@ -1694,19 +1970,33 @@ def _move_pdf_with_name(pdf_path: Path, output_dir: Path, filename: str) -> Tupl
     try:
         with _FS_LOCK:
             output_dir.mkdir(parents=True, exist_ok=True)
-            target_path = get_unique_path(output_dir, filename)
+            target_path = output_dir / filename
+            # Nur bei echtem Konflikt (andere Datei) unique path generieren
+            if target_path.exists():
+                try:
+                    if pdf_path.resolve() == target_path.resolve():
+                        # Quelle = Ziel, nichts tun
+                        return target_path, ""
+                except (OSError, ValueError):
+                    pass
+                # Echtes Duplikat: unique path
+                target_path = get_unique_path(output_dir, filename)
             pdf_path.replace(target_path)
         return target_path, ""
     except OSError as exc:
         return None, f"move_failed: {exc}"
 
 
-def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DATE_FORMAT) -> Dict[str, str]:
-    result: Dict[str, str] = {
+def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DATE_FORMAT) -> Dict[str, object]:
+    result: Dict[str, object] = {
         "supplier": "",
+        "supplier_raw": "",
+        "supplier_canonical": "",
         "supplier_confidence": "",
         "supplier_source": "",
         "supplier_guess_line": "",
+        "supplier_matched_alias": "",
+        "supplier_candidates": [],
         "supplier_gibberish": "",
         "date": "",
         "date_source": "",
@@ -1722,6 +2012,8 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "ocr_rotation": "",
         "ocr_rotation_reason": "",
         "rotate_hint": "",
+        "doc_type_scores": {},
+        "doc_type_evidence_by_type": {},
         "parsing_failed": False,
     }
 
@@ -1733,11 +2025,30 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     supplier_confidence = 0.0
     supplier_source = "none"
     supplier_guess_line = ""
+    supplier_candidates: List[Dict[str, object]] = []
 
     # Wenn Textlayer vorhanden, verwende ihn zur Lieferantenerkennung
     if textlayer_text.strip():
-        s, c, src, guess = detect_supplier(textlayer_text)
+        s, c, src, guess, cands = detect_supplier_detailed(textlayer_text)
         supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
+        supplier_candidates = cands or []
+        
+        # Canonicalize supplier
+        supplier_raw = supplier
+        supplier_canonical = supplier
+        supplier_matched_alias = ""
+        
+        if canonicalize_supplier is not None and supplier and supplier != "Unbekannt":
+            try:
+                match = canonicalize_supplier(supplier, textlayer_text)
+                if match:
+                    supplier_canonical = match.canonical_name
+                    supplier_matched_alias = match.matched_alias
+                    # Update confidence wenn Canonicalizer höher ist
+                    if match.confidence > supplier_confidence:
+                        supplier_confidence = match.confidence
+            except Exception as exc:
+                _LOGGER.warning(f"Canonicalization failed: {exc}")
 
     # 2) Datum über Textlayer versuchen; KEIN OCR/Render hier (sonst doppelte PDF->Image Konvertierung)
     date_pick = extract_best_date(
@@ -1763,6 +2074,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     # 3) Falls Textlayer nicht aussagekräftig: OCR als Fallback durchführen
     rotation_value = 0
     images: List[object] = []
+    ocr_text = ""
     if not skip_ocr and ((not textlayer_text.strip()) or (not date_obj)):
         images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
         if render_error and not textlayer_err:
@@ -1772,13 +2084,30 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         
         # VEREINFACHT: Kein force_best mehr - normale Rotation mit Fallback
         ocr_result = _ocr_images_best(images or [], force_best=False) if images else {"text": "", "error": render_error or ""}
-        ocr_text = ""
         if not ocr_result.get("error"):
             ocr_text = ocr_result.get("text", "")
             # Lieferantenerkennung per OCR nur falls vorher unbekannt oder geringe Konfidenz
             if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.5:
-                s, c, src, guess = detect_supplier(ocr_text)
+                s, c, src, guess, cands = detect_supplier_detailed(ocr_text)
                 supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
+                supplier_candidates = cands or []
+                
+                # Canonicalize supplier (OCR)
+                supplier_raw = supplier
+                supplier_canonical = supplier
+                supplier_matched_alias = ""
+                
+                if canonicalize_supplier is not None and supplier and supplier != "Unbekannt":
+                    try:
+                        combined_text = "\n".join([t for t in (textlayer_text, ocr_text) if t])
+                        match = canonicalize_supplier(supplier, combined_text)
+                        if match:
+                            supplier_canonical = match.canonical_name
+                            supplier_matched_alias = match.matched_alias
+                            if match.confidence > supplier_confidence:
+                                supplier_confidence = match.confidence
+                    except Exception as exc:
+                        _LOGGER.warning(f"Canonicalization (OCR) failed: {exc}")
         result["ocr_rotation"] = ocr_result.get("rotation", "")
         result["ocr_rotation_reason"] = ocr_result.get("rotation_reason", "")
         result["rotate_hint"] = result["ocr_rotation"]
@@ -1840,9 +2169,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                 if paddle_text and not paddle_err:
                     # Lieferant: nur überschreiben, wenn wir dadurch besser werden
                     if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.70:
-                        s2, c2, src2, guess2 = detect_supplier(paddle_text)
+                        s2, c2, src2, guess2, cands2 = detect_supplier_detailed(paddle_text)
                         if s2 and s2 != "Unbekannt" and c2 >= supplier_confidence:
                             supplier, supplier_confidence, supplier_source, supplier_guess_line = s2, c2, "paddle", guess2
+                            supplier_candidates = cands2 or []
 
                     # Datum: nur überschreiben, wenn wir dadurch besser werden
                     if (not date_obj) or (date_confidence < 0.75):
@@ -1875,10 +2205,24 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         supplier_source = "none"
         supplier_guess_line = ""
         gibberish = True
-    result["supplier"] = supplier
+    
+    # Stelle sicher dass supplier_raw und supplier_canonical gesetzt sind
+    # (falls nicht schon durch Canonicalizer gesetzt)
+    if 'supplier_raw' not in locals():
+        supplier_raw = supplier
+    if 'supplier_canonical' not in locals():
+        supplier_canonical = supplier
+    if 'supplier_matched_alias' not in locals():
+        supplier_matched_alias = ""
+    
+    result["supplier"] = supplier_canonical  # Nutze canonical name
+    result["supplier_raw"] = supplier_raw
+    result["supplier_canonical"] = supplier_canonical
+    result["supplier_matched_alias"] = supplier_matched_alias
     result["supplier_confidence"] = f"{supplier_confidence:.2f}" if supplier_confidence else ""
     result["supplier_source"] = supplier_source
     result["supplier_guess_line"] = supplier_guess_line
+    result["supplier_candidates"] = supplier_candidates[:3] if supplier_candidates else []
     result["supplier_gibberish"] = "1" if gibberish else ""
     result["date"] = date_obj.strftime(INTERNAL_DATE_FORMAT) if date_obj else ""
     result["date_source"] = date_source if date_obj else ""
@@ -1887,7 +2231,199 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     if date_source == "filename_fallback":
         result["parsing_failed"] = True
 
-    new_filename = build_new_filename(supplier, date_obj, date_format=date_format)
+    # Dokumentnummer: Supplier-spezifische Extraktion (neu)
+    combined_text = "\n".join([t for t in (textlayer_text, ocr_text) if t])
+    
+    # Dokumenttyp-Klassifikation (DocType)
+    doc_type = "SONSTIGES"
+    doc_type_confidence = 0.50
+    doc_type_evidence = ""
+    doc_type_scores: Dict[str, float] = {}
+    doc_type_evidence_by_type: Dict[str, List[str]] = {}
+    
+    if classify_doc_type is not None:
+        try:
+            doctype_result = classify_doc_type(combined_text, supplier_canonical)
+            doc_type = doctype_result.doc_type
+            doc_type_confidence = doctype_result.confidence
+            doc_type_evidence = ", ".join(doctype_result.evidence[:3])  # Top-3 Keywords
+            doc_type_scores = getattr(doctype_result, "scores", {}) or {}
+            doc_type_evidence_by_type = getattr(doctype_result, "evidence_by_type", {}) or {}
+            _LOGGER.info(f"DocType classified as '{doc_type}' (confidence={doc_type_confidence:.2f})")
+        except Exception as exc:
+            _LOGGER.warning(f"DocType classification failed: {exc}")
+
+    # Supplier + DocType Coupling / Cross-check
+    try:
+        # 0) ÜBERNAHMESCHEIN: Rollenbasierte KSR-Erkennung (Beförderer/Abfallentsorger)
+        def _extract_role_block(text: str, marker: str, max_lines: int = 20) -> str:
+            lines = [ln.rstrip() for ln in (text or "").splitlines()]
+            if not lines:
+                return ""
+            marker_norm = _normalize_supplier_text(marker)
+            for idx, ln in enumerate(lines):
+                if marker_norm and marker_norm in _normalize_supplier_text(ln):
+                    out: list[str] = [ln]
+                    taken = 0
+                    j = idx + 1
+                    while j < len(lines) and taken < max_lines:
+                        if not (lines[j] or "").strip():
+                            break
+                        out.append(lines[j])
+                        taken += 1
+                        j += 1
+                    return "\n".join(out)
+            return ""
+
+        role_candidates: List[Dict[str, object]] = []
+        if doc_type == "ÜBERNAHMESCHEIN":
+            role_texts = [
+                _extract_role_block(combined_text, "Beförderer (Name, Anschrift)"),
+                _extract_role_block(combined_text, "Befoerderer (Name, Anschrift)"),
+                _extract_role_block(combined_text, "Abfallentsorger (Name, Anschrift)"),
+                _extract_role_block(combined_text, "Abfallentsorger"),
+            ]
+            role_joined = "\n".join([t for t in role_texts if t])
+            role_norm = _normalize_supplier_text(role_joined)
+            if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE):
+                role_candidates.append(
+                    {
+                        "canonical": "KSR",
+                        "confidence": 0.99,
+                        "source": "role_block",
+                        "matched": "Beförderer/Abfallentsorger",
+                        "segment": "role",
+                    }
+                )
+
+        if role_candidates:
+            # KSR hart priorisieren
+            best_role = sorted(role_candidates, key=lambda x: float(x.get("confidence") or 0.0), reverse=True)[0]
+            supplier_canonical = str(best_role.get("canonical") or supplier_canonical)
+            supplier_source = str(best_role.get("source") or supplier_source)
+            supplier_confidence = max(float(best_role.get("confidence") or 0.0), float(supplier_confidence or 0.0))
+            # Kandidatenliste um role candidate erweitern (für Debug)
+            supplier_candidates = [best_role] + [c for c in (supplier_candidates or []) if c != best_role]
+
+        # 1) Franz Bracht aus Recipient-Kontext verwerfen
+        if supplier_candidates:
+            current = (supplier_canonical or "").strip()
+            if current.lower() == "franz bracht":
+                fb = [c for c in supplier_candidates if str(c.get("canonical") or "").lower() == "franz bracht"]
+                if fb and all(str(c.get("segment") or "") == "recipient" for c in fb):
+                    alt = next(
+                        (
+                            c
+                            for c in supplier_candidates
+                            if str(c.get("segment") or "") != "recipient" and str(c.get("canonical") or "")
+                        ),
+                        None,
+                    )
+                    if alt:
+                        supplier_canonical = str(alt.get("canonical"))
+                        supplier_source = str(alt.get("source") or supplier_source)
+                        supplier_confidence = float(alt.get("confidence") or supplier_confidence)
+                    else:
+                        supplier_canonical = "Unbekannt"
+                        supplier_source = "recipient_blocked"
+                        supplier_confidence = 0.0
+
+        # 2) ÜBERNAHMESCHEIN: KSR boost (Fallback wenn role_block nichts ergab)
+        if doc_type == "ÜBERNAHMESCHEIN":
+            seg = segment_text(combined_text, header_max_lines=40, recipient_max_lines=20)
+            hb_norm = _normalize_supplier_text("\n".join(seg.header_lines + seg.body_lines))
+            if re.search(r"\bksr\b", hb_norm, flags=re.IGNORECASE):
+                supplier_canonical = "KSR"
+                supplier_confidence = max(supplier_confidence, 0.90)
+                supplier_source = "doctype_boost"
+
+            # WM deaktivieren, wenn WM nur im recipient vorkommt
+            if supplier_canonical in ("WM", "WM SE"):
+                rec_norm = _normalize_supplier_text("\n".join(seg.recipient_lines))
+                if ("wm" in rec_norm) and ("wm" not in hb_norm):
+                    supplier_canonical = "Unbekannt"
+                    supplier_confidence = 0.0
+                    supplier_source = "wm_recipient_blocked"
+    except Exception:
+        pass
+    
+    result["doc_type"] = doc_type
+    result["doc_type_confidence"] = f"{doc_type_confidence:.2f}"
+    result["doc_type_evidence"] = doc_type_evidence
+    result["doc_type_scores"] = doc_type_scores
+    result["doc_type_evidence_by_type"] = doc_type_evidence_by_type
+
+    # Update supplier fields after coupling
+    result["supplier"] = supplier_canonical
+    result["supplier_canonical"] = supplier_canonical
+    result["supplier_confidence"] = f"{supplier_confidence:.2f}" if supplier_confidence else ""
+    result["supplier_source"] = supplier_source
+    # Kandidaten nach Coupling erneut kappen (damit role_block/override sichtbar bleibt)
+    if supplier_candidates:
+        result["supplier_candidates"] = list(supplier_candidates)[:3]
+    
+    # Dokumentnummer: Supplier-spezifische Extraktion mit DocType
+    doc_number = None
+    doc_number_source = None
+    doc_number_confidence = "none"
+    
+    if extract_doc_number is not None:
+        try:
+            # Verwende supplier-spezifische Extraktion mit CANONICAL name + DocType
+            doc_result = extract_doc_number(combined_text, supplier_canonical, doc_type)
+            if doc_result.doc_number:
+                doc_number = doc_result.doc_number
+                doc_number_source = doc_result.source_field
+                doc_number_confidence = doc_result.confidence
+        except Exception as exc:
+            _LOGGER.warning(f"doc_number extraction failed: {exc}")
+    
+    # Fallback: alte Methode
+    if not doc_number:
+        numbers = extract_document_numbers(combined_text)
+        doc_number = numbers.get("delivery_note_no") or numbers.get("order_no")
+        if doc_number:
+            doc_number_confidence = numbers.get("confidence", "medium")
+            doc_number_source = "legacy_extraction"
+    
+    # Wenn keine Nummer gefunden: ohneNr + Hash
+    if not doc_number:
+        if generate_fallback_identifier is not None:
+            fallback_hash = generate_fallback_identifier(combined_text)
+            doc_number = f"ohneNr_{fallback_hash}"
+        else:
+            doc_number = "ohneNr"
+        doc_number_confidence = "none"
+        doc_number_source = "fallback"
+    
+    # Speichere in result dict
+    result["doc_number"] = doc_number
+    result["doc_number_source"] = doc_number_source or ""
+    result["doc_number_confidence"] = doc_number_confidence
+    
+    # Review-Status-Berechnung (Gate Check)
+    if decide_review_status is not None and load_review_settings is not None:
+        try:
+            settings_path = config.DATA_DIR / "settings.json"
+            review_settings = load_review_settings(settings_path)
+            review_decision = decide_review_status(result, review_settings)
+            result["review_status"] = review_decision.status
+            result["review_reasons"] = review_decision.reasons
+            _LOGGER.info(f"Review Status: {review_decision.status}, Reasons: {review_decision.reasons}")
+        except Exception as exc:
+            _LOGGER.warning(f"Review status check failed: {exc}")
+            result["review_status"] = "NEW"
+            result["review_reasons"] = []
+    else:
+        result["review_status"] = "NEW"
+        result["review_reasons"] = []
+
+    new_filename = build_new_filename(
+        supplier_canonical,  # Nutze canonical name für Dateinamen
+        date_obj,
+        delivery_note_nr=doc_number,
+        date_format=date_format,
+    )
     target_path, move_error = _move_pdf_with_name(pdf_path, output_dir, new_filename)
     if not target_path:
         shorter_name = build_new_filename(

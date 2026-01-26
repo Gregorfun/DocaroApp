@@ -1,0 +1,257 @@
+# Supplier Alias Mappings für kanonische Lieferanten-Namen
+# Format: canonical_name -> aliases (String-Liste + Regex-Pattern)
+
+suppliers:
+  # WM Fahrzeugteile
+  WM:
+    canonical: "WM"
+    aliases:
+      - "WM"
+      - "W+M"
+      - "W & M"
+      - "WM Fahrzeugteile"
+      - "WM SE"
+      - "WM Autoteile"
+      - "WM Group"
+    regex_patterns:
+      - "(?i)wm\\s+.*(fahrzeug|teile|auto)"
+      - "(?i)w\\s*[+&]\\s*m"
+    domain_hints: ["wm-se.com"]
+
+  # Ortojohann + Kraft
+  OK:
+    canonical: "Ortojohann+Kraft"
+    aliases:
+      - "Ortojohann"
+      - "Ortojohann+Kraft"
+      - "Ortojohann & Kraft"
+      - "Ortojohann + Kraft"
+      - "OK"
+      - "Ortojohann GmbH"
+      - "Kraft GmbH"
+    regex_patterns:
+      - "(?i)ortojohann?"
+      - "(?i)ortojohann.*kraft"
+    # Nur "OK" alleine ist zu generisch, muss mit context geprüft werden
+    context_required:
+      - "OK"  # Nur wenn im Kontext Hinweise auf Autoteile/KFZ
+
+  # PIRTEK
+  PIRTEK:
+    canonical: "PIRTEK"
+    aliases:
+      - "PIRTEK"
+      - "Pirtek"
+      - "PIRTEK Deutschland"
+      - "Pirtek GmbH"
+    regex_patterns:
+      - "(?i)pirtek"
+    domain_hints: ["pirtek.de"]
+
+  # FUCHS Lubricants / Schmierstoffe
+  FUCHS:
+    canonical: "FUCHS"
+    aliases:
+      - "FUCHS"
+      - "Fuchs"
+      - "FUCHS LUBRICANTS"
+      - "Fuchs Lubricants"
+      - "FUCHS SCHMIERSTOFFE"
+      - "Fuchs Schmierstoffe"
+      - "FUCHS EUROPE SCHMIERSTOFFE"
+      - "FUCHS OIL"
+    regex_patterns:
+      - "(?i)fuchs\\s+lubricants?"
+      - "(?i)fuchs\\s+.*(oil|lubricant|schmier)"
+      - "(?i)fuchs\\s+europe"
+    domain_hints: ["fuchs.com", "fuchs-oil.de"]
+
+  # Vergölst Reifen
+  VERGOELST:
+    canonical: "Vergölst"
+    aliases:
+      - "Vergölst"
+      - "Vergolst"
+      - "Vergoelst"
+      - "Vergölst GmbH"
+      - "Vergölst Filiale"
+      - "Vergölst Reifen"
+    regex_patterns:
+      - "(?i)vergo[eö]lst"
+    domain_hints: ["vergoelst.de"]
+
+  # WFI Wireless Funk- und Informationstechnik
+  WFI:
+    canonical: "WFI"
+    aliases:
+      - "WFI"
+      - "Wireless Funk"
+      - "Wireless Funk- und Informationstechnik"
+      - "Wireless Funk u. Informationstechnik"
+      - "Wireless Funk und Informationstechnik"
+      - "WFI GmbH"
+      - "WFI Wireless"
+    regex_patterns:
+      - "(?i)wireless\\s+funk"
+      - "(?i)wfi\\s+wireless"
+      - "(?i)w\\.?f\\.?i\\.?"
+    domain_hints: ["wfi-wireless.de"]
+
+  # LKQ PV Automotive
+  LKQ:
+    canonical: "LKQ PV AUTOMOTIVE"
+    aliases:
+      - "LKQ"
+      - "LKQ PV Automotive"
+      - "LKQ PV"
+      - "PV Automotive"
+      - "LKQ Deutschland"
+      - "LKQ GmbH"
+    regex_patterns:
+      - "(?i)lkq\\s+pv"
+      - "(?i)lkq.*automotive"
+      - "(?i)pv\\s+automotive"
+    domain_hints: ["lkqpv.de", "lkq.com"]
+
+  # Hofmeister & Meincke
+  HOFMEISTER_MEINCKE:
+    canonical: "Hofmeister & Meincke"
+    aliases:
+      - "Hofmeister"
+      - "Meincke"
+      - "Hofmeister & Meincke"
+      - "Hofmeister und Meincke"
+      - "Hofmeister+Meincke"
+      - "Hofmeister Meincke"
+      - "Hofmeister & Meincke GmbH"
+    regex_patterns:
+      - "(?i)hofmeister.*meincke"
+      - "(?i)hofmeister\\s*[&+]\\s*meincke"
+    # Einzelner Name nur wenn beide vorkommen oder typische Produkte (Reifen, etc.)
+    context_patterns:
+      - "hofmeister": ["meincke", "reifen", "pkw"]
+      - "meincke": ["hofmeister", "reifen", "pkw"]
+
+  # Franz Bracht (eigene Firma)
+  BRACHT:
+    canonical: "Franz Bracht"
+    aliases:
+      - "Bracht"
+      - "Franz Bracht"
+      - "Franz Bracht Kran-Vermietung"
+      - "Franz Bracht Kranvermietung"
+      - "Bracht Autokrane"
+      - "Bracht GmbH"
+    regex_patterns:
+      - "(?i)franz\\s+bracht"
+      - "(?i)bracht.*kran"
+      - "(?i)bracht.*autokran"
+    domain_hints: ["bracht-autokrane.de"]
+
+  # Förch / Foerch
+  FOERCH:
+    canonical: "Foerch"
+    aliases:
+      - "FÖRCH"
+      - "FOERCH"
+      - "Förch"
+      - "Foerch"
+      - "Förch GmbH"
+      - "Foerch GmbH"
+    regex_patterns:
+      - "(?i)f[öo]rch"
+      - "(?i)foerch"
+    domain_hints: ["foerch.de"]
+
+  # Tadano / CEVA Logistics
+  TADANO:
+    canonical: "Tadano"
+    aliases:
+      - "TADANO"
+      - "Tadano"
+      - "Tadano Faun"
+      - "Tadano Faun GmbH"
+      - "CEVA"
+      - "CEVA Logistics"
+      - "CEVA Logistics GmbH"
+    regex_patterns:
+      - "(?i)tadano"
+      - "(?i)ceva"
+      - "(?i)tadano.*faun"
+    domain_hints: ["tadanofaun.de", "cevalogistics.com"]
+
+  # Liebherr
+  LIEBHERR:
+    canonical: "Liebherr"
+    aliases:
+      - "LIEBHERR"
+      - "Liebherr"
+      - "Liebherr-Werk Ehingen"
+      - "Liebherr Werk Ehingen"
+      - "Liebherr GmbH"
+    regex_patterns:
+      - "(?i)liebherr"
+      - "(?i)werk\\s+ehingen"
+      - "(?i)liebherr.*ehingen"
+    domain_hints: ["liebherr.com"]
+
+  # Manitowoc
+  MANITOWOC:
+    canonical: "Manitowoc"
+    aliases:
+      - "Manitowoc"
+      - "Manitowoc Crane Group"
+      - "Manitowoc Cranes"
+    regex_patterns:
+      - "(?i)manitowoc"
+    domain_hints: ["manitowoc.com"]
+
+  # Kommissionierliste (DocType)
+  KOMMISSIONIERLISTE:
+    canonical: "Kommissionierliste"
+    aliases:
+      - "KOMMISSIONIERLISTE"
+      - "Kommissionierliste (pro Auftrag)"
+      - "Emergency Order"
+      - "Kommissionierliste pro Auftrag"
+    regex_patterns:
+      - "(?i)kommissionierliste"
+      - "(?i)emergency\\s+order"
+    domain_hints: []
+
+  # Übernahmeschein (Entsorgung/KS)
+  UEBERNAHMESCHEIN:
+    canonical: "Uebernahmeschein"
+    aliases:
+      - "Übernahmeschein"
+      - "Uebernahmeschein"
+      - "Übernahmeschein (Entsorgung)"
+      - "Uebernahmeschein (Entsorgung)"
+    regex_patterns:
+      - "(?i)übernahmeschein"
+      - "(?i)uebernahmeschein"
+    domain_hints: []
+
+# Normalisierungs-Regeln
+normalization:
+  # Umlaut-Varianten
+  umlauts:
+    ä: ["ae", "a"]
+    ö: ["oe", "o"]
+    ü: ["ue", "u"]
+    ß: ["ss", "s"]
+  
+  # Zu entfernende Zeichen (für fuzzy matching)
+  remove_chars: ".,;:!?()[]{}\"'`"
+  
+  # Whitespace normalisieren
+  collapse_whitespace: true
+
+# Confidence-Schwellwerte
+confidence:
+  exact_match: 0.95
+  regex_match: 0.90
+  fuzzy_high: 0.85
+  fuzzy_medium: 0.75
+  fuzzy_low: 0.60
+  min_threshold: 0.60  # Mindest-Confidence für Acceptance

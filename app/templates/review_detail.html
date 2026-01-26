@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}Review: {{ doc.original_filename }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>📝 Review: {{ doc.original_filename }}</h2>
+    
+    <div class="row">
+        <!-- Left: PDF Preview -->
+        <div class="col-md-6">
+            <h4>PDF Vorschau</h4>
+            {% if doc.thumbnail_path %}
+            <img src="/{{ doc.thumbnail_path }}" class="img-fluid border" alt="Preview">
+            {% else %}
+            <p class="text-muted">Keine Vorschau verfügbar</p>
+            {% endif %}
+            
+            <div class="mt-3">
+                <a href="/{{ doc.path }}" target="_blank" class="btn btn-secondary">
+                    <i class="bi bi-file-pdf"></i> PDF öffnen
+                </a>
+            </div>
+        </div>
+        
+        <!-- Right: Extraction Summary + Edit Form -->
+        <div class="col-md-6">
+            <h4>Extraktionsergebnis</h4>
+            
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5>Status: 
+                        {% if doc.review_status == 'NEEDS_REVIEW' %}
+                        <span class="badge bg-warning">NEEDS REVIEW</span>
+                        {% elif doc.review_status == 'READY' %}
+                        <span class="badge bg-success">READY</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ doc.review_status }}</span>
+                        {% endif %}
+                    </h5>
+                    
+                    {% if doc.review_reasons %}
+                    <p><strong>Gründe:</strong></p>
+                    <ul>
+                        {% for reason in doc.review_reasons %}
+                        <li><code>{{ reason }}</code></li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <form id="reviewForm">
+                <input type="hidden" name="file_id" value="{{ doc.file_id }}">
+                
+                <!-- Supplier -->
+                <div class="mb-3">
+                    <label class="form-label">
+                        <strong>Lieferant</strong>
+                        <span class="badge {{ _confidence_badge_class(doc.supplier_confidence, settings.gate_supplier_min) }}">
+                            {{ '%.0f%%' | format(doc.supplier_confidence * 100) if doc.supplier_confidence else 'N/A' }}
+                        </span>
+                    </label>
+                    <select class="form-select" name="supplier_canonical" required>
+                        <option value="">-- Wählen --</option>
+                        {% for supp in canonical_suppliers %}
+                        <option value="{{ supp }}" {% if supp == doc.supplier_canonical %}selected{% endif %}>
+                            {{ supp }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <!-- Datum -->
+                <div class="mb-3">
+                    <label class="form-label">
+                        <strong>Datum</strong>
+                        <span class="badge {{ _confidence_badge_class(doc.date_confidence, settings.gate_date_min) }}">
+                            {{ '%.0f%%' | format(doc.date_confidence * 100) if doc.date_confidence else 'N/A' }}
+                        </span>
+                    </label>
+                    <input type="date" class="form-control" name="doc_date_iso" value="{{ doc.date }}" required>
+                </div>
+                
+                <!-- Dokumenttyp -->
+                <div class="mb-3">
+                    <label class="form-label">
+                        <strong>Dokumenttyp</strong>
+                        <span class="badge {{ _confidence_badge_class(doc.doc_type_confidence, settings.gate_doc_type_min) }}">
+                            {{ '%.0f%%' | format(doc.doc_type_confidence * 100) if doc.doc_type_confidence else 'N/A' }}
+                        </span>
+                    </label>
+                    <select class="form-select" name="doc_type" required>
+                        <option value="">-- Wählen --</option>
+                        <option value="Rechnung" {% if doc.doc_type == 'Rechnung' %}selected{% endif %}>Rechnung</option>
+                        <option value="Lieferschein" {% if doc.doc_type == 'Lieferschein' %}selected{% endif %}>Lieferschein</option>
+                        <option value="Gutschrift" {% if doc.doc_type == 'Gutschrift' %}selected{% endif %}>Gutschrift</option>
+                        <option value="Bestellung" {% if doc.doc_type == 'Bestellung' %}selected{% endif %}>Bestellung</option>
+                        <option value="Angebot" {% if doc.doc_type == 'Angebot' %}selected{% endif %}>Angebot</option>
+                        <option value="Sonstiges" {% if doc.doc_type == 'Sonstiges' %}selected{% endif %}>Sonstiges</option>
+                    </select>
+                </div>
+                
+                <!-- Dokumentnummer -->
+                <div class="mb-3">
+                    <label class="form-label">
+                        <strong>Dokumentnummer</strong>
+                        <span class="badge {{ _confidence_badge_class(doc.doc_number_confidence, settings.gate_doc_number_min) }}">
+                            {{ '%.0f%%' | format(doc.doc_number_confidence * 100) if doc.doc_number_confidence else 'N/A' }}
+                        </span>
+                    </label>
+                    <input type="text" class="form-control" name="doc_number" value="{{ doc.doc_number or '' }}" placeholder="z.B. RE-2025-00123">
+                </div>
+                
+                <div class="d-grid gap-2">
+                    <button type="button" class="btn btn-primary" onclick="submitReview(false)">
+                        <i class="bi bi-check-circle"></i> Speichern & als READY markieren
+                    </button>
+                    <button type="button" class="btn btn-success" onclick="submitReview(true)">
+                        <i class="bi bi-check-all"></i> Speichern & Finalisieren
+                    </button>
+                    <a href="/review" class="btn btn-secondary">
+                        <i class="bi bi-arrow-left"></i> Zurück zur Queue
+                    </a>
+                </div>
+            </form>
+            
+            <div id="resultMessage" class="alert mt-3" style="display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+async function submitReview(finalize) {
+    const form = document.getElementById('reviewForm');
+    const formData = new FormData(form);
+    const fileId = formData.get('file_id');
+    
+    const payload = {
+        supplier_canonical: formData.get('supplier_canonical'),
+        doc_type: formData.get('doc_type'),
+        doc_date_iso: formData.get('doc_date_iso'),
+        doc_number: formData.get('doc_number'),
+        finalize: finalize
+    };
+    
+    try {
+        const response = await fetch(`/review/api/${fileId}/correct`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        const result = await response.json();
+        
+        const msgDiv = document.getElementById('resultMessage');
+        
+        if (result.ok) {
+            msgDiv.className = 'alert alert-success mt-3';
+            if (result.finalized) {
+                msgDiv.textContent = `✅ Erfolgreich finalisiert: ${result.finalized_path}`;
+                setTimeout(() => window.location.href = '/review', 2000);
+            } else {
+                msgDiv.textContent = '✅ Gespeichert. Status: READY';
+                setTimeout(() => window.location.href = '/review', 2000);
+            }
+        } else {
+            msgDiv.className = 'alert alert-danger mt-3';
+            msgDiv.textContent = `❌ Fehler: ${result.error || result.message || 'Unbekannt'}`;
+        }
+        
+        msgDiv.style.display = 'block';
+    } catch (err) {
+        const msgDiv = document.getElementById('resultMessage');
+        msgDiv.className = 'alert alert-danger mt-3';
+        msgDiv.textContent = `❌ Netzwerkfehler: ${err.message}`;
+        msgDiv.style.display = 'block';
+    }
+}
+</script>
+
+{# Helper macro für Confidence Badge Farbe #}
+{% macro _confidence_badge_class(conf, gate) -%}
+    {% if conf is none %}
+        bg-secondary
+    {% elif conf >= gate %}
+        bg-success
+    {% elif conf >= 0.50 %}
+        bg-warning text-dark
+    {% else %}
+        bg-danger
+    {% endif %}
+{%- endmacro %}
+{% endblock %}

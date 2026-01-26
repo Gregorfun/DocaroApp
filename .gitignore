@@ -19,8 +19,13 @@ data/tmp/
 data/eingang/
 data/fertig/
 data/uploads/
+data/quarantaene/
 data/session_files.json
+data/settings.json
 data/*.lock
+
+# Auth (persistent, lokal)
+data/auth/
 
 # Incoming scans (local, large)
 Daten eingang/

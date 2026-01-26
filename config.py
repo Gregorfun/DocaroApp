@@ -14,6 +14,9 @@ class Config:
     OUT_DIR = DATA_DIR / "fertig"
     TMP_DIR = DATA_DIR / "tmp"
     QUARANTINE_DIR = DATA_DIR / "quarantaene"
+    SETTINGS_PATH = DATA_DIR / "settings.json"
+    AUTH_DIR = DATA_DIR / "auth"
+    AUTH_DB_PATH = AUTH_DIR / "auth.db"
     SUPPLIER_CORRECTIONS_PATH = DATA_DIR / "supplier_corrections.json"
     SESSION_FILES_PATH = DATA_DIR / "session_files.json"
     # Lock-Datei für Cross-Process File Locking (siehe app/_locked_file)
@@ -33,12 +36,22 @@ class Config:
     PADDLEOCR_LANG = os.getenv("DOCARO_PADDLEOCR_LANG", "german")
     TESSERACT_CMD = os.getenv("DOCARO_TESSERACT_CMD")
     POPPLER_BIN = os.getenv("DOCARO_POPPLER_BIN")
+    # Auto-Sort Defaults (können via Settings-Seite überschrieben werden)
+    AUTO_SORT_ENABLED_DEFAULT = os.getenv("DOCARO_AUTOSORT_ENABLED", "0") == "1"
+    AUTO_SORT_BASE_DIR_DEFAULT = Path(os.getenv("DOCARO_AUTOSORT_BASE", str(DATA_DIR / "fertig")))
+    AUTO_SORT_FOLDER_FORMAT_DEFAULT = os.getenv("DOCARO_AUTOSORT_FOLDER_FORMAT", "A")
+    AUTO_SORT_MODE_DEFAULT = os.getenv("DOCARO_AUTOSORT_MODE", "move")
+    AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT = float(os.getenv("DOCARO_AUTOSORT_CONF", "0.80"))
+    AUTO_SORT_FALLBACK_FOLDER_DEFAULT = os.getenv("DOCARO_AUTOSORT_FALLBACK", "_Unsortiert (Prüfen)")
     # Optional: rekursive Dateisuche (langsamer, findet aber mehr Dateien)
     DEEP_SCAN = os.getenv("DOCARO_DEEP_SCAN", "0") == "1"
     # Server-Einstellungen
     SERVER_HOST = os.getenv("DOCARO_SERVER_HOST", "127.0.0.1")
     SERVER_PORT = int(os.getenv("DOCARO_SERVER_PORT", "5001"))
     SERVER_USE_RELOADER = os.getenv("DOCARO_SERVER_USE_RELOADER", "0") == "1"
+
+    # Seed-User (optional). Passwort NIE committen, nur via ENV setzen.
+    SEED_EMAIL_DEFAULT = os.getenv("DOCARO_SEED_EMAIL", "g.machuletz@bracht-autokrane.de")
 
     @staticmethod
     def setup_logging():

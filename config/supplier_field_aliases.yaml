@@ -1,0 +1,171 @@
+# Supplier-spezifische Feldnamen für Dokumentnummern-Erkennung
+# Format: canonical_supplier_name -> doc_number_fields (priorisiert)
+
+suppliers:
+  WM:
+    doc_number_fields:
+      - "Auftrags-Nr"
+      - "Auftrags Nr"
+      - "Auftragsnr"
+      - "Auftragsnummer"
+    doc_type_overrides: {}
+
+  "Ortojohann+Kraft":  # Canonical name aus supplier_aliases
+    doc_number_fields:
+      - "Rechnung"
+      - "Rechnungsnummer"
+      - "RE-"
+    secondary_fields:
+      - "Ursprünglicher Auftrag"
+      - "Auftrag"
+    doc_type_overrides:
+      Rechnung:
+        primary: ["Rechnung", "Rechnungsnummer", "RE-"]
+        secondary: ["Ursprünglicher Auftrag"]
+
+  PIRTEK:
+    doc_number_fields:
+      - "Arbeitsauftrag"
+      - "Auftragsnummer"
+    doc_type_overrides: {}
+
+  FUCHS:
+    doc_number_fields:
+      - "Lieferschein"
+      - "Nummer"
+    secondary_fields:
+      - "Auftragsnummer"
+    doc_type_overrides: {}
+
+  "Vergölst":  # Canonical name
+    doc_number_fields:
+      - "Belegnummer"
+      - "Beleg-Nr"
+      - "Beleg Nr"
+    secondary_fields:
+      - "Lieferschein"
+      - "Lieferschein-Nr"
+    doc_type_overrides: {}
+
+  WFI:
+    doc_number_fields:
+      - "Lieferscheinnr"
+      - "Lieferschein Nr"
+      - "Lieferschein"
+      - "LS"
+    doc_type_overrides: {}
+
+  "LKQ PV AUTOMOTIVE":  # Canonical name
+    doc_number_fields:
+      - "Lieferschein-Nr"
+      - "Lieferschein Nr"
+      - "Lieferschein-Nr."
+      - "Lieferschein-Nr:"
+    secondary_fields:
+      - "Auftragsnummer"
+    doc_type_overrides: {}
+
+  "Hofmeister & Meincke":  # Canonical name
+    doc_number_fields:
+      - "Auftragsnr"
+      - "Auftragsnr."
+      - "Auftrags-Nr"
+      - "Auftrag"
+    doc_type_overrides: {}
+
+  "Franz Bracht":  # Canonical name (optional)
+    doc_number_fields:
+      - "Auftragsnummer"
+      - "Auftrag-Nr"
+      - "Projekt-Nr"
+    doc_type_overrides: {}
+
+  # Neue Supplier
+  Foerch:
+    doc_number_fields:
+      - "Belegnummer"
+      - "Beleg-Nr"
+      - "Beleg Nr"
+    secondary_fields:
+      - "Kundennummer"
+      - "Kunden-Nr"
+      - "Lieferschein"
+    doc_type_overrides: {}
+
+  Tadano:
+    doc_number_fields:
+      - "Order ID"
+      - "OrderID"
+      - "Order-ID"
+      - "Auftragsnummer"
+    secondary_fields:
+      - "Lieferschein"
+      - "Lieferschein-Nr"
+      - "Shipment"
+    doc_type_overrides: {}
+
+  Liebherr:
+    doc_number_fields:
+      - "Lieferschein"
+      - "Lieferschein-Nr"
+      - "Lieferscheinnummer"
+    secondary_fields:
+      - "Auftragsnummer"
+      - "Bestellnummer"
+      - "Bestell-Nr"
+    doc_type_overrides: {}
+
+  Manitowoc:
+    doc_number_fields:
+      - "Rechnungsnummer"
+      - "Rechnung Nr"
+      - "Rechnung-Nr"
+    secondary_fields:
+      - "Auftrags-Nr"
+      - "Auftrags Nr"
+      - "Auftrag"
+    doc_type_overrides:
+      Rechnung:
+        primary: ["Rechnungsnummer", "Rechnung Nr"]
+        secondary: ["Auftrags-Nr", "Auftrag"]
+
+  Kommissionierliste:
+    doc_number_fields:
+      - "Auftrag:"
+      - "Auftrag"
+      - "Auftragsnummer"
+    secondary_fields:
+      - "Kunde"
+      - "Komm.-is"
+    doc_type_overrides: {}
+
+  Uebernahmeschein:
+    doc_number_fields:
+      - "Nr."
+      - "Nr"
+      - "Nummer"
+    secondary_fields:
+      - "Entsorgungsnachweis-Nummer"
+      - "Entsorgungsnachweis Nummer"
+      - "SNE"
+    doc_type_overrides: {}
+
+# Fallback-Keywords wenn kein Supplier-Mapping vorhanden
+fallback_keywords:
+  lieferschein:
+    - "Lieferschein-Nr"
+    - "Lieferscheinnr"
+    - "Lieferschein Nr"
+    - "LS-Nr"
+  rechnung:
+    - "Rechnungsnummer"
+    - "Rechnung Nr"
+    - "RE-"
+  auftrag:
+    - "Auftragsnummer"
+    - "Auftrag Nr"
+    - "Auftrag-Nr"
+  beleg:
+    - "Belegnummer"
+    - "Beleg-Nr"
+    - "Beleg Nr"

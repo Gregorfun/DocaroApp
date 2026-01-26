@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Review Queue{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>🔍 Review Queue</h2>
+    <p class="text-muted">Dokumente zur manuellen Überprüfung</p>
+    
+    {% if documents|length == 0 %}
+    <div class="alert alert-success">
+        <i class="bi bi-check-circle"></i>
+        Keine Dokumente zur Review! Alle verarbeitet.
+    </div>
+    {% else %}
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Vorschau</th>
+                    <th>Lieferant</th>
+                    <th>Datum</th>
+                    <th>Dokumenttyp</th>
+                    <th>Dok-Nr</th>
+                    <th>Status</th>
+                    <th>Gründe</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for doc in documents %}
+                <tr>
+                    <td>
+                        {% if doc.thumbnail_path %}
+                        <img src="/{{ doc.thumbnail_path }}" alt="Preview" style="max-width:80px;max-height:80px;">
+                        {% else %}
+                        <i class="bi bi-file-pdf" style="font-size:40px;"></i>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge {{ _confidence_badge_class(doc.supplier_confidence, settings.gate_supplier_min) }}">
+                            {{ '%.0f%%' | format(doc.supplier_confidence * 100) if doc.supplier_confidence else 'N/A' }}
+                        </span>
+                        <br>
+                        <strong>{{ doc.supplier_canonical or '?' }}</strong>
+                    </td>
+                    <td>
+                        <span class="badge {{ _confidence_badge_class(doc.date_confidence, settings.gate_date_min) }}">
+                            {{ '%.0f%%' | format(doc.date_confidence * 100) if doc.date_confidence else 'N/A' }}
+                        </span>
+                        <br>
+                        {{ doc.date or '?' }}
+                    </td>
+                    <td>
+                        <span class="badge {{ _confidence_badge_class(doc.doc_type_confidence, settings.gate_doc_type_min) }}">
+                            {{ '%.0f%%' | format(doc.doc_type_confidence * 100) if doc.doc_type_confidence else 'N/A' }}
+                        </span>
+                        <br>
+                        {{ doc.doc_type or '?' }}
+                    </td>
+                    <td>
+                        <span class="badge {{ _confidence_badge_class(doc.doc_number_confidence, settings.gate_doc_number_min) }}">
+                            {{ '%.0f%%' | format(doc.doc_number_confidence * 100) if doc.doc_number_confidence else 'N/A' }}
+                        </span>
+                        <br>
+                        {{ doc.doc_number or '?' }}
+                    </td>
+                    <td>
+                        {% if doc.review_status == 'NEEDS_REVIEW' %}
+                        <span class="badge bg-warning">NEEDS REVIEW</span>
+                        {% elif doc.review_status == 'READY' %}
+                        <span class="badge bg-success">READY</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ doc.review_status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% for reason in doc.review_reasons %}
+                        <span class="badge bg-secondary">{{ reason }}</span><br>
+                        {% endfor %}
+                    </td>
+                    <td>
+                        <a href="/review/{{ doc.file_id }}" class="btn btn-sm btn-primary">
+                            <i class="bi bi-pencil"></i> Review
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+
+{# Helper macro für Confidence Badge Farbe #}
+{% macro _confidence_badge_class(conf, gate) -%}
+    {% if conf is none %}
+        bg-secondary
+    {% elif conf >= gate %}
+        bg-success
+    {% elif conf >= 0.50 %}
+        bg-warning text-dark
+    {% else %}
+        bg-danger
+    {% endif %}
+{%- endmacro %}
+{% endblock %}

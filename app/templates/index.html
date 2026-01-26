@@ -13,6 +13,12 @@
         <p>PDFs hochladen, OCR auslesen, umbenennen und herunterladen.</p>
         <p class="meta-links">
           <a href="{{ url_for('suppliers') }}">Lieferanten verwalten</a>
+          <span aria-hidden="true">·</span>
+          <a href="{{ url_for('settings_page') }}">Einstellungen</a>
+          <span aria-hidden="true">·</span>
+          <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+            <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
+          </form>
         </p>
         {% if reset_done %}
           <p class="notice">Downloads wurden zurückgesetzt.</p>
@@ -63,25 +69,6 @@
         </form>
       </section>
 
-      <section class="panel docling-panel">
-        <h2>Docling-Analyse (Vorschau)</h2>
-        <p class="muted">Schnelle Vorschau mit Docling Document Processing Engine.</p>
-        <form enctype="multipart/form-data" id="docling-form">
-          <label class="file-input">
-            <span>PDF-Dateien für Docling-Analyse</span>
-            <input type="file" name="files" accept=".pdf,application/pdf" multiple id="docling-files" />
-          </label>
-          <button type="button" id="docling-analyze-btn" class="ghost">Docling-Analyse starten</button>
-        </form>
-        <div id="docling-results" style="display: none; margin-top: 1rem;">
-          <h3>Analyse-Ergebnisse</h3>
-          <div id="docling-results-content"></div>
-        </div>
-        <div id="docling-error" style="display: none; margin-top: 1rem; color: red;">
-          <strong>Fehler:</strong> <span id="docling-error-msg"></span>
-        </div>
-      </section>
-
       <section class="panel">
         <h2>Ergebnisse</h2>
         <form method="get" action="{{ url_for('index') }}" class="inline-form">
@@ -110,6 +97,7 @@
                 <th class="col-file">Datei</th>
                 <th>Lieferant</th>
                 <th>Datum</th>
+                <th>Dokumenttyp</th>
                 <th>Status</th>
                 <th class="col-action">Aktionen</th>
               </tr>
@@ -132,6 +120,17 @@
                   <td class="col-file" data-field="out_name">{{ item.out_name or '-' }}</td>
                   <td data-field="supplier">{{ item.supplier or '-' }}</td>
                   <td data-field="date">{{ item.date or '-' }}</td>
+                  <td data-field="doc_type">
+                    {% if item.doc_type %}
+                      {% set doc_conf = item.doc_type_confidence|float if item.doc_type_confidence else 0 %}
+                      <span class="badge badge-{{ item.doc_type|lower }}" 
+                            title="Confidence: {{ '%.2f'|format(doc_conf) }}{% if item.doc_type_evidence %}, Keywords: {{ item.doc_type_evidence }}{% endif %}">
+                        {{ item.doc_type }}
+                      </span>
+                    {% else %}
+                      <span class="muted">-</span>
+                    {% endif %}
+                  </td>
                   <td class="status-cell" data-field="review_state">
                     <span class="status-pill status-{{ row_state }}">
                       {% if row_state == "unvollstaendig" %}unvollständig{% elif row_state == "in_bearbeitung" %}in Bearbeitung{% else %}fertig{% endif %}
@@ -191,6 +190,37 @@
                       <div><span class="detail-label">Fehler:</span> <span data-field="error">{{ item.error or '-' }}</span></div>
                       <div><span class="detail-label">OCR:</span> <span data-field="tesseract_status">{{ item.tesseract_status or '-' }}</span></div>
                       <div><span class="detail-label">Poppler:</span> <span data-field="poppler_status">{{ item.poppler_status or '-' }}</span></div>
+                      <div>
+                        <span class="detail-label">Auto-Sort:</span>
+                        <span data-field="auto_sort_status">{{ item.auto_sort_status or '-' }}</span>
+                        <span class="muted" data-field="auto_sort_reason">
+                          {% if item.export_path %}
+                            Ablage: {{ item.export_path }}
+                          {% elif item.auto_sort_reason_code or item.auto_sort_reason %}
+                            Nicht sortiert: {{ item.auto_sort_reason_code or item.auto_sort_reason }}
+                          {% endif %}
+                        </span>
+                      </div>
+
+                      <div class="detail-span-full">
+                        <details class="debug-details">
+                          <summary>Erkennung (Debug)</summary>
+                          <div class="debug-grid">
+                            <div>
+                              <span class="detail-label">Lieferant-Kandidaten:</span>
+                              <pre class="debug-pre" data-field="supplier_candidates">{% if item.supplier_candidates %}{{ item.supplier_candidates|tojson(indent=2) }}{% else %}-{% endif %}</pre>
+                            </div>
+                            <div>
+                              <span class="detail-label">DocType-Scores:</span>
+                              <pre class="debug-pre" data-field="doc_type_scores">{% if item.doc_type_scores %}{{ item.doc_type_scores|tojson(indent=2) }}{% else %}-{% endif %}</pre>
+                            </div>
+                            <div>
+                              <span class="detail-label">DocType-Evidence:</span>
+                              <pre class="debug-pre" data-field="doc_type_evidence_by_type">{% if item.doc_type_evidence_by_type %}{{ item.doc_type_evidence_by_type|tojson(indent=2) }}{% else %}-{% endif %}</pre>
+                            </div>
+                          </div>
+                        </details>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -295,6 +325,7 @@
             error: payload.error || "-",
             tesseract_status: payload.tesseract_status || "-",
             poppler_status: payload.poppler_status || "-",
+            auto_sort_status: payload.auto_sort_status || "-",
           };
           Object.entries(fields).forEach(([key, value]) => {
             if (value === undefined) {
@@ -323,6 +354,24 @@
             if (popplerCell) {
               popplerCell.textContent = payload.poppler_status || "-";
             }
+            const autoSortStatus = detailRow.querySelector('[data-field="auto_sort_status"]');
+            if (autoSortStatus) {
+              autoSortStatus.textContent = payload.auto_sort_status || "-";
+            }
+            const autoSortReason = detailRow.querySelector('[data-field="auto_sort_reason"]');
+            if (autoSortReason) {
+              const status = payload.auto_sort_status || "";
+              const reason = payload.auto_sort_reason || "";
+              const code = payload.auto_sort_reason_code || "";
+              const exportPath = payload.export_path || "";
+              if (exportPath) {
+                autoSortReason.textContent = `Ablage: ${exportPath}`;
+              } else if (code || reason) {
+                autoSortReason.textContent = `Nicht sortiert: ${code || reason}`;
+              } else {
+                autoSortReason.textContent = "";
+              }
+            }
             const confCell = detailRow.querySelector('[data-field="supplier_confidence"]');
             if (confCell) {
               const confValue = parseFloat(payload.supplier_confidence || "0");
@@ -337,6 +386,49 @@
                 }
               }
               confCell.className = cls;
+            }
+
+            const supplierCands = detailRow.querySelector('[data-field="supplier_candidates"]');
+            if (supplierCands) {
+              supplierCands.textContent = payload.supplier_candidates
+                ? JSON.stringify(payload.supplier_candidates, null, 2)
+                : "-";
+            }
+            const docScores = detailRow.querySelector('[data-field="doc_type_scores"]');
+            if (docScores) {
+              docScores.textContent = payload.doc_type_scores
+                ? JSON.stringify(payload.doc_type_scores, null, 2)
+                : "-";
+            }
+            const docEv = detailRow.querySelector('[data-field="doc_type_evidence_by_type"]');
+            if (docEv) {
+              docEv.textContent = payload.doc_type_evidence_by_type
+                ? JSON.stringify(payload.doc_type_evidence_by_type, null, 2)
+                : "-";
+            }
+          }
+
+          const docTypeCell = row.querySelector('[data-field="doc_type"]');
+          if (docTypeCell) {
+            docTypeCell.textContent = "";
+            if (payload.doc_type) {
+              const span = document.createElement("span");
+              const cls = String(payload.doc_type || "").toLowerCase();
+              span.className = `badge badge-${cls}`;
+              const confValue = parseFloat(payload.doc_type_confidence || "0");
+              const confText = Number.isNaN(confValue) ? "" : confValue.toFixed(2);
+              let title = confText ? `Confidence: ${confText}` : "";
+              if (payload.doc_type_evidence) {
+                title = title ? `${title}, Keywords: ${payload.doc_type_evidence}` : `Keywords: ${payload.doc_type_evidence}`;
+              }
+              span.title = title;
+              span.textContent = payload.doc_type;
+              docTypeCell.appendChild(span);
+            } else {
+              const muted = document.createElement("span");
+              muted.className = "muted";
+              muted.textContent = "-";
+              docTypeCell.appendChild(muted);
             }
           }
           const statusCell = row.querySelector(".status-pill");
@@ -393,97 +485,6 @@
             }
           });
         });
-      })();
-
-      // Docling-Analyse-Handler
-      (function doclingAnalysis() {
-        const analyzeBtn = document.getElementById("docling-analyze-btn");
-        const fileInput = document.getElementById("docling-files");
-        const resultsDiv = document.getElementById("docling-results");
-        const resultContent = document.getElementById("docling-results-content");
-        const errorDiv = document.getElementById("docling-error");
-        const errorMsg = document.getElementById("docling-error-msg");
-
-        if (!analyzeBtn) return;
-
-        analyzeBtn.addEventListener("click", async () => {
-          const files = fileInput.files;
-          if (!files || files.length === 0) {
-            errorMsg.textContent = "Keine Dateien ausgewählt";
-            errorDiv.style.display = "block";
-            resultsDiv.style.display = "none";
-            return;
-          }
-
-          analyzeBtn.disabled = true;
-          analyzeBtn.textContent = "Analysiere...";
-          errorDiv.style.display = "none";
-          resultsDiv.style.display = "none";
-
-          try {
-            const formData = new FormData();
-            for (let file of files) {
-              formData.append("files", file);
-            }
-
-            const response = await fetch("{{ url_for('analyze_docling') }}", {
-              method: "POST",
-              body: formData,
-            });
-
-            const result = await response.json();
-
-            if (!result.ok) {
-              errorMsg.textContent = result.error || "Unbekannter Fehler";
-              errorDiv.style.display = "block";
-              return;
-            }
-
-            // Zeige Ergebnisse
-            resultContent.innerHTML = "";
-            if (result.results && result.results.length > 0) {
-              result.results.forEach((res) => {
-                const div = document.createElement("div");
-                div.style.marginBottom = "1.5rem";
-                div.style.padding = "1rem";
-                div.style.border = "1px solid #ddd";
-                div.style.borderRadius = "4px";
-
-                let html = `<strong>${escapeHtml(res.filename)}</strong><br/>`;
-                if (res.error) {
-                  html += `<span style="color: red;">Fehler: ${escapeHtml(res.error)}</span>`;
-                } else {
-                  html += `<small>Text-Länge: ${res.text_length} Zeichen<br/>`;
-                  if (res.supplier) html += `Lieferant: <strong>${escapeHtml(res.supplier)}</strong><br/>`;
-                  if (res.date) html += `Datum: <strong>${escapeHtml(res.date)}</strong><br/>`;
-                  if (res.metadata) html += `Seiten: ${res.metadata.num_pages}<br/>`;
-                  if (res.tables_found) html += `Tabellen: ${res.tables_found}<br/>`;
-                  html += `</small><br/><pre style="background: #f5f5f5; padding: 0.5rem; overflow-x: auto; font-size: 0.85rem;">${escapeHtml(res.text)}</pre>`;
-                }
-                div.innerHTML = html;
-                resultContent.appendChild(div);
-              });
-              resultsDiv.style.display = "block";
-            }
-          } catch (err) {
-            errorMsg.textContent = "Netzwerkfehler: " + err.message;
-            errorDiv.style.display = "block";
-          } finally {
-            analyzeBtn.disabled = false;
-            analyzeBtn.textContent = "Docling-Analyse starten";
-          }
-        });
-
-        function escapeHtml(text) {
-          const map = {
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            '"': "&quot;",
-            "'": "&#039;",
-          };
-          return String(text).replace(/[&<>"']/g, (m) => map[m]);
-        }
       })();
     </script>
   </body>

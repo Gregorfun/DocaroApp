@@ -330,6 +330,49 @@ td {
   border: 1px solid #b9dfc4;
 }
 
+/* DocType Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  cursor: help;
+}
+
+.badge-rechnung {
+  background: #ffe5e5;
+  color: #b30000;
+  border: 1px solid #ff9999;
+}
+
+.badge-lieferschein {
+  background: #e5f0ff;
+  color: #0047b3;
+  border: 1px solid #99c2ff;
+}
+
+.badge-übernahmeschein {
+  background: #f0e5ff;
+  color: #6b00b3;
+  border: 1px solid #cc99ff;
+}
+
+.badge-kommissionierliste {
+  background: #fff5e5;
+  color: #b37400;
+  border: 1px solid #ffd699;
+}
+
+.badge-sonstiges {
+  background: #f0f0f0;
+  color: #666;
+  border: 1px solid #ccc;
+}
+
 .col-file,
 .col-error {
   max-width: 220px;
@@ -371,6 +414,35 @@ td {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px 16px;
   font-size: 0.9rem;
+}
+
+.detail-span-full {
+  grid-column: 1 / -1;
+}
+
+.debug-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 16px;
+  margin-top: 10px;
+}
+
+.debug-pre {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 240px;
 }
 
 .detail-label {

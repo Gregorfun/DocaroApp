@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Docaro Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Login</h1>
+        <p class="muted">Docaro ist nur für registrierte Benutzer verfügbar.</p>
+      </header>
+
+      <section class="panel">
+        {% if error %}
+          <p class="notice" style="border-color:#b91c1c;color:#b91c1c;">{{ error }}</p>
+        {% endif %}
+        <form action="{{ url_for('login_submit') }}" method="post" class="settings-form">
+          <div class="form-row">
+            <label>E-Mail</label>
+            <input type="email" name="email" required autocomplete="username" />
+          </div>
+          <div class="form-row">
+            <label>Passwort</label>
+            <input type="password" name="password" required autocomplete="current-password" />
+          </div>
+          <div class="form-actions">
+            <button type="submit">Anmelden</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Docaro Einstellungen</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Einstellungen</h1>
+        <p class="meta-links">
+          <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+          <span aria-hidden="true">·</span>
+          <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+            <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
+          </form>
+        </p>
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            {% for message in messages %}
+              <p class="notice">{{ message }}</p>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+      </header>
+
+      <section class="panel">
+        <form action="{{ url_for('settings_save') }}" method="post" class="settings-form">
+          <div class="form-row">
+            <label class="checkbox">
+              <input type="checkbox" name="auto_sort_enabled" value="1" {% if settings.enabled %}checked{% endif %} />
+              <span>Auto-Sortierung beim Download aktivieren</span>
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label>Basis-Download-Ordner</label>
+            <input type="text" name="base_dir" value="{{ settings.base_dir }}" placeholder="z.B. D:/Docaro/data/fertig" />
+          </div>
+
+          <div class="form-row">
+            <label>Ordnerformat</label>
+            <select name="folder_format">
+              <option value="A" {% if settings.folder_format|upper == 'A' %}selected{% endif %}>&lt;Base&gt;/&lt;Supplier&gt;/&lt;YYYY-MM&gt;/</option>
+              <option value="B" {% if settings.folder_format|upper == 'B' %}selected{% endif %}>&lt;Base&gt;/&lt;Supplier&gt;/&lt;Monatname&gt; &lt;YYYY&gt;/</option>
+              <option value="C" {% if settings.folder_format|upper == 'C' %}selected{% endif %}>&lt;Base&gt;/&lt;Supplier&gt;/&lt;YYYY-MM&gt;_&lt;Supplier&gt;/</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label>Modus</label>
+            <select name="mode">
+              <option value="move" {% if settings.mode == 'move' %}selected{% endif %}>Verschieben</option>
+              <option value="copy" {% if settings.mode == 'copy' %}selected{% endif %}>Kopieren</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label>Confidence-Threshold (Lieferant)</label>
+            <input type="number" name="confidence_threshold" step="0.01" min="0" max="1" value="{{ settings.confidence_threshold }}" />
+          </div>
+
+          <div class="form-row">
+            <label>Fallback-Ordnername</label>
+            <input type="text" name="fallback_folder" value="{{ settings.fallback_folder }}" />
+            <p class="muted">Verwendet, wenn Kriterien nicht erfüllt sind.</p>
+          </div>
+
+          <hr style="margin: 2rem 0;">
+          
+          <h3>🔍 Review Queue Einstellungen</h3>
+          
+          <div class="form-row">
+            <label class="checkbox">
+              <input type="checkbox" name="auto_finalize_enabled" value="1" {% if settings.auto_finalize_enabled %}checked{% endif %} />
+              <span>Auto-Finalisierung bei hohen Confidences aktivieren</span>
+            </label>
+            <p class="muted">Dokumente mit Confidences ≥ allen Gates werden automatisch finalisiert.</p>
+          </div>
+
+          <div class="form-row">
+            <label>Gate: Lieferant Confidence (min)</label>
+            <input type="range" name="gate_supplier_min" min="0" max="1" step="0.05" value="{{ settings.gate_supplier_min or 0.80 }}" 
+                   oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
+            <output>{{ ((settings.gate_supplier_min or 0.80) * 100) | int }}%</output>
+          </div>
+
+          <div class="form-row">
+            <label>Gate: Datum Confidence (min)</label>
+            <input type="range" name="gate_date_min" min="0" max="1" step="0.05" value="{{ settings.gate_date_min or 0.80 }}" 
+                   oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
+            <output>{{ ((settings.gate_date_min or 0.80) * 100) | int }}%</output>
+          </div>
+
+          <div class="form-row">
+            <label>Gate: Dokumenttyp Confidence (min)</label>
+            <input type="range" name="gate_doc_type_min" min="0" max="1" step="0.05" value="{{ settings.gate_doc_type_min or 0.70 }}" 
+                   oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
+            <output>{{ ((settings.gate_doc_type_min or 0.70) * 100) | int }}%</output>
+          </div>
+
+          <div class="form-row">
+            <label>Gate: Dokumentnummer Confidence (min)</label>
+            <input type="range" name="gate_doc_number_min" min="0" max="1" step="0.05" value="{{ settings.gate_doc_number_min or 0.80 }}" 
+                   oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
+            <output>{{ ((settings.gate_doc_number_min or 0.80) * 100) | int }}%</output>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit">Speichern</button>
+            <a class="ghost" href="{{ url_for('index') }}">Abbrechen</a>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

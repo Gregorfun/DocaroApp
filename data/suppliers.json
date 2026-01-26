@@ -73,6 +73,13 @@
         "es |Franz Bracht Kran Vermietun 5-Resyoling GmbH"
       ],
       "created_at": "2026-01-05T10:04:04"
+    },
+    {
+      "name": "Liebherr",
+      "aliases": [
+        "Liebherr-Werk Ehingen GmbH, Postfach 13 61, 89582 Ehingen"
+      ],
+      "created_at": "2026-01-22T06:28:19"
     }
   ]
 }

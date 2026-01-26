@@ -1,4 +1,5 @@
 flask
+argon2-cffi
 pdf2image
 pytesseract
 pillow

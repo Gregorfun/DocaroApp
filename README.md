@@ -67,7 +67,48 @@ docker-compose -f docker/docker-compose.yml up -d
 ./start_app.ps1
 ```
 
-→ Öffne http://localhost:5000
+→ Öffne http://127.0.0.1:5001
+
+---
+
+## 🔐 Login (Registrierung deaktiviert)
+
+Docaro ist nur für registrierte Benutzer nutzbar. Eine Registrierung über das UI ist deaktiviert.
+
+### Seed-User
+
+- `DOCARO_SEED_EMAIL` (Default): `g.machuletz@bracht-autokrane.de`
+- `DOCARO_SEED_PASSWORD`: muss in deiner Shell gesetzt werden (wird **nicht** gespeichert/committed)
+
+PowerShell (nur für aktuelle Session):
+
+```powershell
+$env:DOCARO_SEED_PASSWORD = "<DEIN_PASSWORT>"
+./start_app.ps1
+```
+
+Alternativ per Script (Passwort via ENV oder interaktiv):
+
+```powershell
+D:/Docaro/.venv/Scripts/python.exe -m scripts.seed_user --email g.machuletz@bracht-autokrane.de
+```
+
+---
+
+## ♻️ Stateless Mode (Runtime-Reset)
+
+Beim Start werden alle Dashboard-/Dokument-Runtime-Daten gelöscht, damit nach einem Neustart keine alten Dokumente erscheinen.
+
+Gelöscht/geleert (best-effort):
+
+- `data/tmp/`, `data/eingang/`, `data/fertig/`, `data/quarantaene/`
+- `data/settings.json`, `data/session_files.json`, `data/supplier_corrections.json`, `data/history.jsonl`
+- `data/logs/` (Logfiles)
+
+Nicht gelöscht:
+
+- `ml/` (Modelle/ML-Daten)
+- `data/auth/` (User-DB)
 
 ---
 
