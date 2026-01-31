@@ -111,6 +111,9 @@ class SupplierCanonicalizer:
             # Prepare normalization parameters for caching
             self._prepare_normalization_params()
             
+            # Clear the normalization cache when config changes
+            _normalize_text_cached.cache_clear()
+            
             _LOGGER.info(f"Geladen: {len(self.suppliers)} Supplier-Mappings")
         except Exception as exc:
             _LOGGER.error(f"Config-Ladefehler: {exc}")
@@ -141,7 +144,7 @@ class SupplierCanonicalizer:
         umlauts = self.normalization_rules.get("umlauts", {})
         umlaut_pairs = []
         for umlaut, replacements in umlauts.items():
-            if replacements and len(replacements) > 0:
+            if replacements:
                 umlaut_pairs.append((umlaut, replacements[0]))
         
         self._umlauts_tuple = tuple(umlaut_pairs)

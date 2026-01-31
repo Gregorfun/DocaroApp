@@ -235,7 +235,7 @@ class DoclingProcessor:
                         if element_type.startswith('heading'):
                             try:
                                 level = int(element_type.split('_')[-1])
-                            except:
+                            except (ValueError, IndexError):
                                 level = 1
                         
                         layout_elements.append(LayoutElement(

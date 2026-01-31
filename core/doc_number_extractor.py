@@ -35,7 +35,6 @@ class DocNumberExtractor:
         re.compile(r'\b([A-Z0-9][-A-Z0-9/]{2,})\b', re.IGNORECASE),  # Alphanumerisch mit Sonderzeichen
         re.compile(r'\b(\d{6,})\b'),  # Rein numerisch, mindestens 6 Ziffern
     ]
-    _DATUM_CONTEXT_PATTERN = re.compile(r'datum[:\s-]*{field}|{field}[:\s-]*datum', re.IGNORECASE)
     
     def __init__(self, config_path: Optional[Path] = None):
         """
