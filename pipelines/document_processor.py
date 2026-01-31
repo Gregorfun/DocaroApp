@@ -150,17 +150,19 @@ class DoclingProcessor:
             # Text extrahieren
             full_text = docling_doc.export_to_markdown()
             
-            # Tabellen extrahieren
+            # Single-pass extraction for tables and layout (optimized)
             tables = []
-            if extract_tables:
-                tables = self._extract_tables(docling_doc)
-                _LOGGER.info(f"  → {len(tables)} Tabellen extrahiert")
-            
-            # Layout-Elemente extrahieren
             layout_elements = []
-            if extract_layout:
-                layout_elements = self._extract_layout_elements(docling_doc)
-                _LOGGER.info(f"  → {len(layout_elements)} Layout-Elemente extrahiert")
+            if extract_tables or extract_layout:
+                tables, layout_elements = self._extract_elements_single_pass(
+                    docling_doc, 
+                    extract_tables=extract_tables,
+                    extract_layout=extract_layout
+                )
+                if extract_tables:
+                    _LOGGER.info(f"  → {len(tables)} Tabellen extrahiert")
+                if extract_layout:
+                    _LOGGER.info(f"  → {len(layout_elements)} Layout-Elemente extrahiert")
             
             # Text-Chunking
             chunks = []
@@ -193,6 +195,61 @@ class DoclingProcessor:
                 error=str(e),
                 processing_time=time.time() - start_time
             )
+    
+    def _extract_elements_single_pass(
+        self, 
+        docling_doc, 
+        extract_tables: bool = True,
+        extract_layout: bool = True
+    ) -> Tuple[List[TableData], List[LayoutElement]]:
+        """
+        Extrahiert Tabellen und Layout-Elemente in einem Durchgang (optimiert).
+        
+        Vermeidet mehrfache Iteration über docling_doc.pages für bessere Performance.
+        """
+        tables = []
+        layout_elements = []
+        
+        try:
+            # Single pass über alle Pages und Elements
+            for page_num, page in enumerate(docling_doc.pages):
+                for element in page.elements:
+                    # Tabellen extrahieren
+                    if extract_tables and element.label == "table":
+                        table_data = self._parse_table_element(element, page_num)
+                        if table_data:
+                            tables.append(table_data)
+                    
+                    # Layout-Elemente extrahieren
+                    if extract_layout:
+                        element_type = element.label.lower()
+                        text = element.text if hasattr(element, 'text') else ""
+                        
+                        # Bbox
+                        bbox = None
+                        if hasattr(element, 'bbox'):
+                            bbox = (element.bbox.x1, element.bbox.y1, element.bbox.x2, element.bbox.y2)
+                        
+                        # Level (für Sections/Headers)
+                        level = 0
+                        if element_type.startswith('heading'):
+                            try:
+                                level = int(element_type.split('_')[-1])
+                            except:
+                                level = 1
+                        
+                        layout_elements.append(LayoutElement(
+                            element_type=element_type,
+                            text=text,
+                            page=page_num,
+                            bbox=bbox,
+                            level=level
+                        ))
+        
+        except Exception as e:
+            _LOGGER.warning(f"Element-Extraktion fehlgeschlagen: {e}")
+        
+        return tables, layout_elements
     
     def _extract_tables(self, docling_doc) -> List[TableData]:
         """Extrahiert Tabellen aus DoclingDocument."""
