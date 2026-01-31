@@ -8,6 +8,7 @@ Unterstützt Aliases, Regex-Pattern und Fuzzy-Matching.
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -17,6 +18,39 @@ except ImportError:
     yaml = None
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Global LRU cache for text normalization (common operation)
+@lru_cache(maxsize=512)
+def _normalize_text_cached(text: str, umlauts_tuple: tuple, remove_chars: str, collapse_ws: bool) -> str:
+    """
+    Cached text normalization for performance.
+    
+    Args:
+        text: Text to normalize
+        umlauts_tuple: Tuple of (umlaut, replacement) pairs
+        remove_chars: Characters to remove
+        collapse_ws: Whether to collapse whitespace
+    """
+    if not text:
+        return ""
+    
+    # Lowercase
+    text = text.lower()
+    
+    # Umlaut-Ersetzungen
+    for umlaut, replacement in umlauts_tuple:
+        text = text.replace(umlaut, replacement)
+    
+    # Entferne Sonderzeichen
+    for char in remove_chars:
+        text = text.replace(char, "")
+    
+    # Whitespace kollabieren
+    if collapse_ws:
+        text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
 
 
 @dataclass
@@ -44,16 +78,23 @@ class SupplierCanonicalizer:
         self.suppliers: Dict[str, Dict] = {}
         self.normalization_rules: Dict = {}
         self.confidence_thresholds: Dict = {}
+        self._compiled_patterns: Dict[str, List[Tuple[re.Pattern, str]]] = {}  # Cache compiled regex
+        # Initialize normalization params with defaults
+        self._umlauts_tuple = ()
+        self._remove_chars = ""
+        self._collapse_ws = True
         self._load_config()
     
     def _load_config(self):
         """Lädt Supplier-Alias-Config."""
         if not self.config_path.exists():
             _LOGGER.warning(f"Config nicht gefunden: {self.config_path}")
+            self._prepare_normalization_params()  # Initialize with defaults
             return
         
         if yaml is None:
             _LOGGER.warning("PyYAML nicht installiert")
+            self._prepare_normalization_params()  # Initialize with defaults
             return
         
         try:
@@ -64,9 +105,48 @@ class SupplierCanonicalizer:
             self.normalization_rules = config.get("normalization", {})
             self.confidence_thresholds = config.get("confidence", {})
             
+            # Pre-compile regex patterns for performance
+            self._compile_regex_patterns()
+            
+            # Prepare normalization parameters for caching
+            self._prepare_normalization_params()
+            
             _LOGGER.info(f"Geladen: {len(self.suppliers)} Supplier-Mappings")
         except Exception as exc:
             _LOGGER.error(f"Config-Ladefehler: {exc}")
+            self._prepare_normalization_params()  # Initialize with defaults even on error
+    
+    def _compile_regex_patterns(self):
+        """Pre-kompiliert alle Regex-Patterns für Performance."""
+        self._compiled_patterns.clear()
+        
+        for supplier_key, supplier_config in self.suppliers.items():
+            canonical = supplier_config.get("canonical", supplier_key)
+            patterns = supplier_config.get("regex_patterns", [])
+            
+            compiled_list = []
+            for pattern_str in patterns:
+                try:
+                    compiled_pattern = re.compile(pattern_str)
+                    compiled_list.append((compiled_pattern, pattern_str))
+                except re.error as exc:
+                    _LOGGER.warning(f"Invalid regex pattern '{pattern_str}' for {supplier_key}: {exc}")
+            
+            if compiled_list:
+                self._compiled_patterns[supplier_key] = compiled_list
+    
+    def _prepare_normalization_params(self):
+        """Bereitet Normalization-Parameter für Caching vor."""
+        # Convert umlauts dict to tuple for hashing
+        umlauts = self.normalization_rules.get("umlauts", {})
+        umlaut_pairs = []
+        for umlaut, replacements in umlauts.items():
+            if replacements and len(replacements) > 0:
+                umlaut_pairs.append((umlaut, replacements[0]))
+        
+        self._umlauts_tuple = tuple(umlaut_pairs)
+        self._remove_chars = self.normalization_rules.get("remove_chars", "")
+        self._collapse_ws = self.normalization_rules.get("collapse_whitespace", True)
     
     def canonicalize_supplier(
         self,
@@ -161,29 +241,24 @@ class SupplierCanonicalizer:
         raw_text: str,
         full_text: Optional[str]
     ) -> Optional[SupplierMatch]:
-        """Prüft Regex-Pattern-Matches."""
+        """Prüft Regex-Pattern-Matches mit pre-compiled patterns."""
         search_text = full_text if full_text else raw_text
         
-        for supplier_key, supplier_config in self.suppliers.items():
-            canonical = supplier_config.get("canonical", supplier_key)
-            patterns = supplier_config.get("regex_patterns", [])
+        for supplier_key, compiled_list in self._compiled_patterns.items():
+            canonical = self.suppliers[supplier_key].get("canonical", supplier_key)
             
-            for pattern_str in patterns:
-                try:
-                    pattern = re.compile(pattern_str)
-                    match = pattern.search(search_text)
-                    
-                    if match:
-                        confidence = self.confidence_thresholds.get("regex_match", 0.90)
-                        matched_text = match.group(0)
-                        return SupplierMatch(
-                            canonical_name=canonical,
-                            confidence=confidence,
-                            matched_alias=matched_text,
-                            match_type="regex"
-                        )
-                except re.error as exc:
-                    _LOGGER.warning(f"Invalid regex pattern '{pattern_str}': {exc}")
+            for pattern, pattern_str in compiled_list:
+                match = pattern.search(search_text)
+                
+                if match:
+                    confidence = self.confidence_thresholds.get("regex_match", 0.90)
+                    matched_text = match.group(0)
+                    return SupplierMatch(
+                        canonical_name=canonical,
+                        confidence=confidence,
+                        matched_alias=matched_text,
+                        match_type="regex"
+                    )
         
         return None
     
@@ -224,7 +299,7 @@ class SupplierCanonicalizer:
     
     def _normalize_text(self, text: str) -> str:
         """
-        Normalisiert Text für Matching.
+        Normalisiert Text für Matching (cached for performance).
         
         - Lowercase
         - Umlaut-Varianten
@@ -234,26 +309,13 @@ class SupplierCanonicalizer:
         if not text:
             return ""
         
-        # Lowercase
-        text = text.lower()
-        
-        # Umlaut-Ersetzungen
-        umlauts = self.normalization_rules.get("umlauts", {})
-        for umlaut, replacements in umlauts.items():
-            if replacements and len(replacements) > 0:
-                # Nutze erste Variante (ae, oe, ue)
-                text = text.replace(umlaut, replacements[0])
-        
-        # Entferne Sonderzeichen
-        remove_chars = self.normalization_rules.get("remove_chars", "")
-        for char in remove_chars:
-            text = text.replace(char, "")
-        
-        # Whitespace kollabieren
-        if self.normalization_rules.get("collapse_whitespace", True):
-            text = re.sub(r'\s+', ' ', text)
-        
-        return text.strip()
+        # Use cached normalization for better performance
+        return _normalize_text_cached(
+            text,
+            self._umlauts_tuple,
+            self._remove_chars,
+            self._collapse_ws
+        )
     
     def get_canonical_name(self, supplier_key: str) -> Optional[str]:
         """Gibt kanonischen Namen für Supplier-Key zurück."""

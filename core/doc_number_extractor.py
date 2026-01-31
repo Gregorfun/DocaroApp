@@ -30,6 +30,13 @@ class DocNumberResult:
 class DocNumberExtractor:
     """Extrahiert Dokumentnummern supplier-spezifisch."""
     
+    # Pre-compile regex patterns at class level for performance
+    _DOC_NUMBER_PATTERNS = [
+        re.compile(r'\b([A-Z0-9][-A-Z0-9/]{2,})\b', re.IGNORECASE),  # Alphanumerisch mit Sonderzeichen
+        re.compile(r'\b(\d{6,})\b'),  # Rein numerisch, mindestens 6 Ziffern
+    ]
+    _DATUM_CONTEXT_PATTERN = re.compile(r'datum[:\s-]*{field}|{field}[:\s-]*datum', re.IGNORECASE)
+    
     def __init__(self, config_path: Optional[Path] = None):
         """
         Args:
@@ -221,7 +228,8 @@ class DocNumberExtractor:
                 
                 # WICHTIG: Filtere Datums-Kontext
                 # Wenn "datum" direkt vor/nach dem Feldnamen steht, ignoriere diese Zeile
-                if re.search(r'datum[:\s-]*' + re.escape(field_lower) + r'|' + re.escape(field_lower) + r'[:\s-]*datum', line_lower):
+                datum_pattern = r'datum[:\s-]*' + re.escape(field_lower) + r'|' + re.escape(field_lower) + r'[:\s-]*datum'
+                if re.search(datum_pattern, line_lower):
                     continue
                 
                 # 1) Gleiche Zeile: suche Wert nach Feldname
@@ -261,15 +269,9 @@ class DocNumberExtractor:
         - PLZ (5-stellige reine Zahlen ohne Kontext)
         - IBAN, Telefonnummern, Beträge
         """
-        # Pattern: alphanumerisch, Bindestriche, Slash, mindestens 3 Zeichen
-        # Erweitere Pattern um rein numerische Nummern (mindestens 6 Ziffern)
-        patterns = [
-            r'\b([A-Z0-9][-A-Z0-9/]{2,})\b',  # Alphanumerisch mit Sonderzeichen
-            r'\b(\d{6,})\b',  # Rein numerisch, mindestens 6 Ziffern
-        ]
-        
-        for pattern in patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
+        # Use pre-compiled patterns for better performance
+        for pattern in self._DOC_NUMBER_PATTERNS:
+            matches = pattern.finditer(text)
             
             for match in matches:
                 candidate = match.group(1).strip()
