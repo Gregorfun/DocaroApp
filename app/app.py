@@ -80,6 +80,8 @@ from services.auto_sort import (
 )
 from core.runtime_state import RuntimeStateConfig, reset_runtime_state
 from services.web_auth import install_auth
+from core.performance import profile
+from functools import lru_cache
 
 config = Config()
 DATA_DIR = config.DATA_DIR
@@ -136,6 +138,50 @@ QUARANTINE_DATE_CONF_MIN = float(os.getenv("DOCARO_QUAR_DATE_MIN", "0.75"))
 
 # Auto-Sort Settings (persisted in data/settings.json)
 AUTO_SORT_SETTINGS: Optional[AutoSortSettings] = None
+
+# Session Files Cache (mtime-based)
+_session_cache = {"data": None, "mtime": 0}
+
+# Supplier Canonicalizer Cache
+_supplier_canonicalizer = None
+
+
+def get_supplier_canonicalizer():
+    """Lazy-load Supplier Canonicalizer (nur einmal instanziieren)."""
+    global _supplier_canonicalizer
+    if _supplier_canonicalizer is None:
+        try:
+            from core.supplier_canonicalizer import get_supplier_canonicalizer as _get_canon
+            _supplier_canonicalizer = _get_canon()
+        except Exception as e:
+            logger.warning(f"Supplier Canonicalizer nicht verfügbar: {e}")
+            _supplier_canonicalizer = False  # Merken dass Versuch fehlschlug
+    return _supplier_canonicalizer if _supplier_canonicalizer is not False else None
+
+
+@lru_cache(maxsize=500)
+def canonicalize_supplier_cached(supplier_name: str) -> tuple:
+    """
+    Cached Supplier Canonicalization.
+    
+    Returns:
+        (canonical_name, confidence) oder (supplier_name, 0) bei Fehler
+    """
+    canonicalizer = get_supplier_canonicalizer()
+    if not canonicalizer:
+        return (supplier_name, 0.0)
+    
+    try:
+        result = canonicalizer.canonicalize(supplier_name)
+        return (result.canonical_name, result.confidence)
+    except Exception:
+        return (supplier_name, 0.0)
+
+
+@lru_cache(maxsize=1)
+def load_suppliers_db_cached():
+    """Cached Supplier DB - nur einmal laden."""
+    return load_suppliers_db()
 
 
 def _default_auto_sort_settings() -> AutoSortSettings:
@@ -812,6 +858,7 @@ def process_inbox():
         raise
 
 
+@profile(threshold_seconds=2.0)
 def _background_process_folder(
     input_dir: Path,
     date_fmt: str,
@@ -897,22 +944,45 @@ def _load_last_results():
 
 
 def _load_session_files() -> dict:
+    """Lädt session_files.json mit mtime-basiertem Cache."""
+    global _session_cache
+    
     if not SESSION_FILES_PATH.exists():
         return {}
+    
+    # Cache-Check: Nur neu laden wenn Datei geändert
+    try:
+        mtime = SESSION_FILES_PATH.stat().st_mtime
+        if _session_cache["mtime"] == mtime and _session_cache["data"] is not None:
+            return _session_cache["data"]
+    except OSError:
+        pass
+    
+    # Neu laden
     with _locked_file(SESSION_FILES_LOCK, mode="a+"):
         try:
-            return json.loads(SESSION_FILES_PATH.read_text(encoding="utf-8"))
+            data = json.loads(SESSION_FILES_PATH.read_text(encoding="utf-8"))
+            # Cache aktualisieren
+            _session_cache["data"] = data
+            _session_cache["mtime"] = SESSION_FILES_PATH.stat().st_mtime
+            return data
         except json.JSONDecodeError:
             return {}
 
 
 def _save_session_files(data: dict) -> None:
+    """Speichert session_files.json und invalidiert Cache."""
+    global _session_cache
+    
     SESSION_FILES_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2)
     with _locked_file(SESSION_FILES_LOCK, mode="a+"):
         tmp_path = SESSION_FILES_PATH.with_suffix(".json.tmp")
         tmp_path.write_text(payload, encoding="utf-8")
         tmp_path.replace(SESSION_FILES_PATH)
+    
+    # Cache invalidieren (wird beim nächsten Load neu geladen)
+    _session_cache["mtime"] = 0
 
 
 def _get_session_file_map() -> dict:
