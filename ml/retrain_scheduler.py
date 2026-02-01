@@ -136,9 +136,14 @@ class RetrainScheduler:
             mlflow.set_experiment(self.experiment_name)
             
             with mlflow.start_run(run_name=f"supplier_training_{datetime.now():%Y%m%d_%H%M%S}"):
-                # TODO: Implementiere Training-Logik
-                # z.B. sklearn TfidfVectorizer + LogisticRegression
-                # oder sentence-transformers Embeddings + Cosine-Similarity
+                # IMPLEMENTATION NEEDED: Training-Logik für Supplier-Klassifikation
+                # Empfohlene Ansätze:
+                # 1. sklearn: TfidfVectorizer + LogisticRegression für Text-Klassifikation
+                # 2. sentence-transformers: Embeddings + Cosine-Similarity für semantische Suche
+                # 3. Fine-tuning eines BERT-Modells für Domain-spezifische Erkennung
+                #
+                # Hinweis: Aktuell verwendet das System die regel-basierte SupplierCanonicalizer
+                # mit Alias-Matching und Regex-Patterns (bereits optimiert mit pre-compiled patterns)
                 
                 mlflow.log_param("n_samples", len(training_data))
                 mlflow.log_param("model_type", "supplier_classifier")
@@ -165,7 +170,12 @@ class RetrainScheduler:
         if training_data["supplier"]:
             self.train_supplier_model(training_data["supplier"])
         
-        # TODO: Weitere Modelle trainieren (Date, Doctype)
+        # IMPLEMENTATION NEEDED: Weitere Modelle trainieren
+        # - Date Extractor: ML-basierte Datumserkennung (ergänzend zu regex-basierten Patterns)
+        # - Document Type Classifier: Erkennung von Rechnung/Lieferschein/etc.
+        # 
+        # Hinweis: Date-Extraktion nutzt aktuell optimierte DATE_REGEX_PATTERNS aus constants.py
+        # Doctype-Klassifikation erfolgt durch core/doctype_classifier.py
         
         # Aktualisiere letztes Training-Datum
         self.last_train_date = datetime.now()
