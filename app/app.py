@@ -154,7 +154,9 @@ def get_supplier_canonicalizer():
             from core.supplier_canonicalizer import get_supplier_canonicalizer as _get_canon
             _supplier_canonicalizer = _get_canon()
         except Exception as e:
-            logger.warning(f"Supplier Canonicalizer nicht verfügbar: {e}")
+            # Logger könnte noch nicht initialisiert sein
+            import logging
+            logging.warning(f"Supplier Canonicalizer nicht verfügbar: {e}")
             _supplier_canonicalizer = False  # Merken dass Versuch fehlschlug
     return _supplier_canonicalizer if _supplier_canonicalizer is not False else None
 
