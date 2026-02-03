@@ -879,38 +879,6 @@ def _background_process_folder(
         results = _apply_result_flags(results)
         results = _apply_quarantine(results)
         
-        # Auto-Sortierung direkt nach Verarbeitung (wenn aktiviert)
-        settings = _get_auto_sort_settings()
-        if results:
-            for item in results:
-                _ensure_auto_sort_fields(item)
-                decision = decide_auto_sort(item, settings)
-                item["auto_sort_reason_code"] = decision.reason_code
-                item["auto_sort_details"] = decision.details
-                if not settings.enabled:
-                    item["auto_sort_status"] = "skipped"
-                    item["auto_sort_reason"] = f"Nicht sortiert: {decision.reason_code}"
-                    continue
-
-                out_name = item.get("out_name") or ""
-                if not out_name or item.get("quarantined"):
-                    continue
-                pdf_path = resolve_pdf_path(out_name)
-                if pdf_path and pdf_path.exists():
-                    try:
-                        export_result = export_document(pdf_path, item, settings)
-                        if export_result.path:
-                            item["export_path"] = str(export_result.path)
-                        item["auto_sort_status"] = export_result.status
-                        item["auto_sort_reason"] = export_result.reason
-                        item["auto_sort_reason_code"] = getattr(export_result, "reason_code", "") or decision.reason_code
-                        item["auto_sort_details"] = getattr(export_result, "details", None) or decision.details
-                    except Exception as exc:
-                        logger.warning(f"Auto-sort failed for {out_name}: {exc}")
-                        item["auto_sort_status"] = "failed"
-                        item["auto_sort_reason"] = str(exc)
-                        item["auto_sort_reason_code"] = "AUTOSORT_EXCEPTION"
-        
         _save_last_results(results)
     except Exception as exc:
         _log_exception(log_context, exc)
@@ -2332,14 +2300,21 @@ def download(filename: str):
     if not pdf_path:
         abort(404)
 
-    # Auto-Sort sollte bereits nach Verarbeitung erfolgt sein
-    # Falls nicht (z.B. alte Dateien), hier nachholen
+    # Auto-Sort vor dem Download: Stelle sicher, dass Datei sortiert ist
+    # (falls nicht bereits durch confirm_supplier/confirm_date geschehen)
     settings = _get_auto_sort_settings()
-    if result and settings.enabled and (not export_path_val or not Path(export_path_val).exists()):
-        try:
-            pdf_path, auto_status, auto_reason = _auto_sort_pdf(result, pdf_path)
-        except Exception as exc:
-            logger.warning(f"Auto-sort on download failed: {exc}")
+    if result and settings.enabled and not bool(result.get("quarantined")):
+        # Prüfe ob Auto-Sort bereits erfolgreich war
+        export_path_val = (result.get("export_path") or "").strip()
+        already_sorted = export_path_val and Path(export_path_val).exists()
+        
+        if not already_sorted:
+            # Auto-Sort nachholen
+            try:
+                logger.info(f"Auto-sorting before download: {safe_name}")
+                pdf_path, auto_status, auto_reason = _auto_sort_pdf(result, pdf_path)
+            except Exception as exc:
+                logger.warning(f"Auto-sort on download failed for {safe_name}: {exc}")
     
     if file_id and pdf_path:
         _set_session_file_entry(file_id, pdf_path, pdf_path.name)
@@ -2360,10 +2335,36 @@ def download_all():
     filenames = sorted(_session_filenames())
     if not filenames:
         abort(404)
+    
+    # Auto-Sort vor dem Download für alle Dateien
+    settings = _get_auto_sort_settings()
+    results = _load_last_results() or []
+    if settings.enabled:
+        for item in results:
+            if item.get("quarantined"):
+                continue
+            out_name = item.get("out_name") or ""
+            if not out_name or out_name not in filenames:
+                continue
+            
+            # Prüfe ob Auto-Sort bereits erfolgreich war
+            export_path_val = (item.get("export_path") or "").strip()
+            already_sorted = export_path_val and Path(export_path_val).exists()
+            
+            if not already_sorted:
+                # Auto-Sort nachholen
+                pdf_path = resolve_pdf_path(out_name)
+                if pdf_path and pdf_path.exists():
+                    try:
+                        logger.info(f"Auto-sorting before download_all: {out_name}")
+                        _auto_sort_pdf(item, pdf_path)
+                    except Exception as exc:
+                        logger.warning(f"Auto-sort in download_all failed for {out_name}: {exc}")
+    
     pdfs = []
     for name in filenames:
         path = resolve_pdf_path(name)
-        if path:
+        if path and path.exists():
             pdfs.append(path)
     if not pdfs:
         abort(404)
