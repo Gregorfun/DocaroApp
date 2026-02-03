@@ -23,6 +23,8 @@ function Show-Help {
     Write-Host "  format    - Formatiert Code (Black)"
     Write-Host "  clean     - Bereinigt temporäre Dateien"
     Write-Host "  seed      - Erstellt den Seed-User (nutzt .env oder Defaults)"
+    Write-Host "  diagnose  - Prüft Systemvoraussetzungen und App-Gesundheit"
+    Write-Host "  logs      - Analysiert App-Logs"
 }
 
 if ($Task -eq "test") {
@@ -46,6 +48,14 @@ elseif ($Task -eq "clean") {
 elseif ($Task -eq "seed") {
     Write-Host "Erstelle Seed-User..." -ForegroundColor Green
     & $PythonExe tools/seed_user.py --email $env:DOCARO_SEED_EMAIL --reset-password
+}
+elseif ($Task -eq "diagnose") {
+    Write-Host "Starte Diagnose..." -ForegroundColor Green
+    & $PSScriptRoot\tools\diagnose.ps1
+}
+elseif ($Task -eq "logs") {
+    Write-Host "Analysiere Logs..." -ForegroundColor Green
+    & $PythonExe tools/analyze_logs.py
 }
 else {
     Show-Help
