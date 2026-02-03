@@ -41,7 +41,7 @@ jobs:
     
     - name: Run tests
       run: |
-        python -m pytest core/test_extractor.py -v --cov=core --cov-report=xml
+        python -m pytest
 
   lint:
     runs-on: ubuntu-latest
