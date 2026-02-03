@@ -29,10 +29,24 @@ Dieser Guide hilft dir, die neue Docaro-Pipeline schnell zum Laufen zu bringen.
 .\.venv\Scripts\Activate.ps1
 
 # Installiere Pipeline-Dependencies
+pip install -r requirements.txt
 pip install -r requirements-pipeline.txt
 ```
 
-### Schritt 2: Services starten (optional)
+### Schritt 2: Anwendung starten
+
+Verwende das bereitgestellte Start-Skript (konfiguriert Tesseract, Ports und Logging automatisch):
+
+```powershell
+.\start_app.ps1
+```
+
+Zum Beenden der Anwendung:
+```powershell
+.\stop_app.ps1
+```
+
+### Schritt 3: Services starten (optional)
 
 Für semantische Suche, Label Studio und MLflow:
 

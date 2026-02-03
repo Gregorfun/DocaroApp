@@ -48,6 +48,16 @@ pip install -r requirements.txt
 pip install -r requirements-pipeline.txt
 ```
 
+### Start
+
+```powershell
+# Anwendung Starten (Hintergrund-Prozess)
+.\start_app.ps1
+
+# Anwendung Stoppen
+.\stop_app.ps1
+```
+
 ### Basis-Setup (Windows)
 
 - **Python**: 3.9+

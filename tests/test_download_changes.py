@@ -6,10 +6,10 @@ Test für die neuen Download-Route-Änderungen.
 import sys
 from pathlib import Path
 
-# Add base dir to path
-BASE_DIR = Path(__file__).parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+# Add repo root to path
+REPO_ROOT = Path(__file__).parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 def test_download_code_changes():
     """Überprüfe dass die Code-Änderungen in download-routes vorhanden sind."""

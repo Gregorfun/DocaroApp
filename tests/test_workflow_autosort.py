@@ -13,10 +13,10 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-# Add base dir to path
-BASE_DIR = Path(__file__).parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+# Add repo root to path
+REPO_ROOT = Path(__file__).parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from config import Config
 from services.auto_sort import export_document, load_settings as load_auto_sort_settings, AutoSortSettings

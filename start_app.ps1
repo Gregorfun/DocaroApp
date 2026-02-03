@@ -5,6 +5,7 @@
 
 # Konfiguration
 $APP_PORT = 5001
+$env:DOCARO_SERVER_PORT = $APP_PORT
 
 # Setze Tesseract-Pfade
 $env:DOCARO_TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
