@@ -239,8 +239,8 @@ ALLOWED_DATE_FORMATS = [
 MANUAL_DATE_FORMATS = ALLOWED_DATE_FORMATS
 
 app = Flask(__name__)
-# Fallback Secret Key, falls nicht gesetzt, damit Sessions zuverlässig funktionieren
-app.secret_key = config.SECRET_KEY or secrets.token_hex(16)
+# SECRET_KEY aus config.py (persistent gespeichert in data/.secret_key)
+app.secret_key = config.SECRET_KEY
 
 # Zentrales Logging einrichten
 logger = config.setup_logging()

@@ -126,3 +126,4 @@ if ($check) {
 }
 
 Write-Host "Logs: $outLogPath / $errLogPath" -ForegroundColor DarkGray
+

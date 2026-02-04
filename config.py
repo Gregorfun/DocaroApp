@@ -22,7 +22,8 @@ class Config:
     # Lock-Datei für Cross-Process File Locking (siehe app/_locked_file)
     SESSION_FILES_LOCK = DATA_DIR / "session_files.lock"
     HISTORY_PATH = DATA_DIR / "history.jsonl"
-    SECRET_KEY = os.getenv("DOCARO_SECRET_KEY")
+    SECRET_KEY_FILE = DATA_DIR / ".secret_key"
+    SECRET_KEY = os.getenv("DOCARO_SECRET_KEY") or Config._get_or_create_secret_key()
     DEBUG = os.getenv("DOCARO_DEBUG") == "1"
     OCR_TIMEOUT_SECONDS = int(os.getenv("DOCARO_OCR_TIMEOUT", "8"))
     PDF_CONVERT_TIMEOUT = int(os.getenv("DOCARO_PDF_CONVERT_TIMEOUT", "15"))
@@ -52,6 +53,29 @@ class Config:
 
     # Seed-User (optional). Passwort NIE committen, nur via ENV setzen.
     SEED_EMAIL_DEFAULT = os.getenv("DOCARO_SEED_EMAIL", "g.machuletz@bracht-autokrane.de")
+
+    @staticmethod
+    def _get_or_create_secret_key() -> str:
+        """Generiert oder lädt den persistenten SECRET_KEY."""
+        import secrets
+        Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if Config.SECRET_KEY_FILE.exists():
+            try:
+                return Config.SECRET_KEY_FILE.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+        # Neuen Key generieren
+        new_key = secrets.token_hex(32)
+        try:
+            Config.SECRET_KEY_FILE.write_text(new_key, encoding="utf-8")
+            # Datei verstecken (Windows)
+            if os.name == "nt":
+                import subprocess
+                subprocess.run(["attrib", "+H", str(Config.SECRET_KEY_FILE)], 
+                             check=False, capture_output=True)
+        except Exception:
+            pass
+        return new_key
 
     @staticmethod
     def setup_logging():
