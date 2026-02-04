@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, '/opt/docaro')
 
 listen = ['high', 'default', 'low']
+os.environ.setdefault("DOCARO_WORKER", "1")
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 
 conn = Redis.from_url(redis_url)

@@ -107,7 +107,7 @@ q = Queue('default', connection=redis_conn, default_timeout=3600)  # 1h timeout
 # WICHTIG: Unter Gunicorn laufen mehrere Worker-Prozesse; ein Reset pro Worker-Start
 # kann Uploads/Outputs löschen, sobald ein Worker neu startet. Deshalb nur 1x pro
 # systemd INVOCATION_ID resetten.
-if os.getenv("DOCARO_STATELESS", "1") == "1":
+if os.getenv("DOCARO_STATELESS", "1") == "1" and os.getenv("DOCARO_WORKER", "0") != "1":
     reset_runtime_state_once(
         RuntimeStateConfig(
             repo_root=BASE_DIR,
@@ -243,11 +243,31 @@ ALLOWED_DATE_FORMATS = [
     "%Y-%m-%d",  # ISO (YYYY-MM-DD)
     "%d.%m.%Y",  # Deutsch (TT.MM.JJJJ)
     "%d.%m.%y",  # Deutsch kurz (TT.MM.JJ)
+    "%d-%m-%Y",  # Deutsch mit Bindestrich (TT-MM-JJJJ)
     "%m/%d/%Y",  # US (MM/DD/YYYY)
+    "%Y%m%d",  # Kompakt (YYYYMMDD)
 ]
 
 # Date formats accepted for manual input (same as ALLOWED_DATE_FORMATS)
 MANUAL_DATE_FORMATS = ALLOWED_DATE_FORMATS
+
+
+def _normalize_date_fmt(value: str) -> str:
+    raw = (value or "").strip()
+    # Accept a few human-friendly aliases to avoid hard failures.
+    aliases = {
+        "dd.mm.yyyy": "%d.%m.%Y",
+        "tt.mm.jjjj": "%d.%m.%Y",
+        "dd-mm-yyyy": "%d-%m-%Y",
+        "tt-mm-jjjj": "%d-%m-%Y",
+        "yyyymmdd": "%Y%m%d",
+    }
+    key = raw.lower()
+    if key in aliases:
+        raw = aliases[key]
+    if raw not in ALLOWED_DATE_FORMATS:
+        return "%Y-%m-%d"
+    return raw
 
 app = Flask(__name__)
 # SECRET_KEY aus config.py (persistent gespeichert in data/.secret_key)
@@ -696,9 +716,7 @@ def upload():
             flash("Keine PDF-Dateien ausgewählt.")
             return redirect(url_for("index"))
 
-        date_fmt = request.form.get("date_fmt", "").strip()
-        if date_fmt not in ALLOWED_DATE_FORMATS:
-            date_fmt = "%Y-%m-%d"
+        date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
 
         upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
         upload_dir.mkdir(parents=True, exist_ok=True)
@@ -854,9 +872,7 @@ def process_inbox():
             flash("Keine PDFs in data/eingang gefunden.")
             return redirect(url_for("index"))
 
-        date_fmt = request.form.get("date_fmt", "").strip()
-        if date_fmt not in ALLOWED_DATE_FORMATS:
-            date_fmt = "%Y-%m-%d"
+        date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
 
         _set_progress(total=len(pdfs), done=0)
         _set_processing(True)
@@ -1111,6 +1127,9 @@ def _row_payload(file_id: str, message: str = "") -> dict:
         "supplier_candidates": result.get("supplier_candidates") or [],
         "date": result.get("date") or "",
         "date_confidence": result.get("date_confidence") or "",
+        "doc_number": result.get("doc_number") or "",
+        "doc_number_source": result.get("doc_number_source") or "",
+        "doc_number_confidence": result.get("doc_number_confidence") or "",
         "doc_type": result.get("doc_type") or "",
         "doc_type_confidence": result.get("doc_type_confidence") or "",
         "doc_type_evidence": result.get("doc_type_evidence") or "",
@@ -1258,6 +1277,7 @@ def confirm_supplier():
         before = result or {}
         supplier_before = before.get("supplier") or ""
         date_before = before.get("date") or ""
+        doc_number_before = (before.get("doc_number") or "").strip()
         pdf_path = _resolve_file_path(file_id) or resolve_pdf_path(filename)
         original_path = str(pdf_path) if pdf_path else str(resolve_pdf_path(filename) or "")
         new_name = filename
@@ -1270,7 +1290,12 @@ def confirm_supplier():
             except ValueError:
                 date_obj = None
             if date_obj and pdf_path:
-                recomputed = build_new_filename(supplier_name, date_obj, date_format=INTERNAL_DATE_FORMAT)
+                recomputed = build_new_filename(
+                    supplier_name,
+                    date_obj,
+                    delivery_note_nr=doc_number_before or None,
+                    date_format=INTERNAL_DATE_FORMAT,
+                )
                 target_path, rename_error = _rename_pdf_with_name(pdf_path, recomputed)
                 if rename_error:
                     _set_result_error(file_id, f"rename_failed: {rename_error}")
@@ -1338,6 +1363,8 @@ def _update_last_results(file_id: str, supplier_name: str, new_name: str = "") -
             item["supplier"] = supplier_name
             item["supplier_source"] = "db"
             item["supplier_confidence"] = "0.90"
+            item["manual_reviewed"] = "1"
+            item["parsing_failed"] = False
             if new_name:
                 item["out_name"] = new_name
             item["supplier_missing"] = _is_supplier_missing(supplier_name)
@@ -1360,9 +1387,59 @@ def _update_last_results_date(file_id: str, new_name: str, date_iso: str) -> Non
         if item.get("file_id") == file_id:
             item["date"] = date_iso
             item["date_source"] = "manual"
+            item["date_confidence"] = "0.90"
+            item["manual_reviewed"] = "1"
+            item["parsing_failed"] = False
             if new_name:
                 item["out_name"] = new_name
             item["date_missing"] = _is_date_missing(date_iso, False)
+            needed, reason = _is_quarantine_needed(item)
+            item["quarantined"] = "1" if needed else ""
+            item["quarantine_reason"] = reason if needed else ""
+            item["needs_review"] = _is_review_needed(item)
+            break
+    _save_last_results(results)
+
+
+def _update_last_results_doc_number(file_id: str, new_name: str, doc_number: str) -> None:
+    if not file_id:
+        return
+    results = _load_last_results()
+    if not results:
+        return
+    doc_number = (doc_number or "").strip()
+    for item in results:
+        if item.get("file_id") == file_id:
+            item["doc_number"] = doc_number
+            item["doc_number_source"] = "manual"
+            # Keep extractor-style confidence labels
+            item["doc_number_confidence"] = "high" if doc_number else "none"
+            item["manual_reviewed"] = "1"
+            item["parsing_failed"] = False
+            if new_name:
+                item["out_name"] = new_name
+            needed, reason = _is_quarantine_needed(item)
+            item["quarantined"] = "1" if needed else ""
+            item["quarantine_reason"] = reason if needed else ""
+            item["needs_review"] = _is_review_needed(item)
+            break
+    _save_last_results(results)
+
+
+def _update_last_results_doc_type(file_id: str, doc_type: str) -> None:
+    if not file_id:
+        return
+    results = _load_last_results()
+    if not results:
+        return
+    doc_type = (doc_type or "").strip()
+    for item in results:
+        if item.get("file_id") == file_id:
+            item["doc_type"] = doc_type
+            item["doc_type_confidence"] = "0.90" if doc_type else (item.get("doc_type_confidence") or "")
+            item["doc_type_evidence"] = "manual" if doc_type else (item.get("doc_type_evidence") or "")
+            item["manual_reviewed"] = "1"
+            item["parsing_failed"] = False
             needed, reason = _is_quarantine_needed(item)
             item["quarantined"] = "1" if needed else ""
             item["quarantine_reason"] = reason if needed else ""
@@ -1480,6 +1557,14 @@ def _parse_conf(value: object) -> float:
 
 
 def _is_quarantine_needed(item: dict) -> Tuple[bool, str]:
+    # If a human explicitly reviewed/confirmed a document, do not quarantine
+    # based on confidence thresholds anymore. Only hard missing fields should.
+    if bool(item.get("manual_reviewed")):
+        if bool(item.get("date_missing")):
+            return True, "date_missing"
+        if bool(item.get("supplier_missing")):
+            return True, "supplier_missing"
+        return False, ""
     if bool(item.get("date_missing")):
         return True, "date_missing"
     if bool(item.get("supplier_missing")):
@@ -1844,7 +1929,9 @@ def _build_view_context(
     supplier_confidence = result.get("supplier_confidence") or ""
     filename = result.get("out_name") or result.get("filename") or file_id
     date_valAe = date_valAe or result.get("date") or ""
-    date_fmt = date_fmt if date_fmt in MANUAL_DATE_FORMATS else INTERNAL_DATE_FORMAT
+    doc_number = (result.get("doc_number") or "").strip()
+    doc_type = (result.get("doc_type") or "").strip()
+    date_fmt = date_fmt if date_fmt in MANUAL_DATE_FORMATS else "%d-%m-%Y"
     review_items = _review_list()
     review_total = len(review_items)
     review_index = 0
@@ -1865,8 +1952,11 @@ def _build_view_context(
         "review_index": review_index,
         "review_total": review_total,
         "date_valAe": date_valAe,
+        "date_value": date_valAe,
         "date_error": date_error,
         "date_fmt": date_fmt,
+        "doc_number": doc_number,
+        "doc_type": doc_type,
         "pdf_missing": pdf_missing,
     }
 
@@ -1922,7 +2012,8 @@ def confirm_date_from_view():
 
     supplier = (result.get("supplier") or "").strip() or "Unbekannt"
 
-    new_filename = build_new_filename(supplier, date_obj, date_format=date_fmt)
+    doc_number = (result.get("doc_number") or "").strip() or None
+    new_filename = build_new_filename(supplier, date_obj, delivery_note_nr=doc_number, date_format=date_fmt)
     original_path = str(pdf_path)
     target_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
     if move_error or not target_path:
@@ -2002,7 +2093,8 @@ def confirm_date():
 
     supplier = (result.get("supplier") or "").strip() or "Unbekannt"
 
-    new_filename = build_new_filename(supplier, date_obj, date_format=date_fmt)
+    doc_number = (result.get("doc_number") or "").strip() or None
+    new_filename = build_new_filename(supplier, date_obj, delivery_note_nr=doc_number, date_format=date_fmt)
     original_path = str(pdf_path)
     target_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
     if move_error or not target_path:
@@ -2084,6 +2176,287 @@ def raw_pdf(file_id: str):
     response = send_file(pdf_path, mimetype="application/pdf", as_attachment=False, download_name=filename or file_id)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def _normalize_doc_number_input(value: str) -> str:
+    cleaned = (value or "").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    # allow typical doc-number chars
+    cleaned = re.sub(r"[^a-zA-Z0-9 ._\-/]+", "", cleaned)
+    cleaned = cleaned.strip("._- /")
+    if len(cleaned) > 60:
+        cleaned = cleaned[:60].rstrip()
+    return cleaned
+
+
+@app.post("/confirm_doc_type")
+def confirm_doc_type():
+    file_id = request.form.get("file_id", "").strip()
+    if not file_id:
+        abort(404)
+    result = _result_for_file_id(file_id)
+    if not result:
+        abort(404)
+
+    raw_val = (request.form.get("doc_type", "") or "").strip()
+    allowed = {
+        "RECHNUNG",
+        "LIEFERSCHEIN",
+        "ÜBERNAHMESCHEIN",
+        "KOMMISSIONIERLISTE",
+        "SONSTIGES",
+    }
+    if raw_val not in allowed:
+        message = "Dokumenttyp ungültig."
+        if _is_ajax_request():
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message)
+        return redirect(url_for("index"))
+
+    before = result.get("doc_type") or ""
+    _update_last_results_doc_type(file_id, raw_val)
+    _append_history(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "file_id": file_id,
+            "action_type": "confirm_doc_type",
+            "doc_type_before": before,
+            "doc_type_after": raw_val,
+        }
+    )
+    message = "Dokumenttyp gespeichert."
+    if _is_ajax_request():
+        return jsonify(_row_payload(file_id, message=message))
+    flash(message)
+    return redirect(url_for("index"))
+
+
+@app.post("/confirm_doc_number")
+def confirm_doc_number():
+    file_id = request.form.get("file_id", "").strip()
+    if not file_id:
+        abort(404)
+    result = _result_for_file_id(file_id)
+    if not result:
+        abort(404)
+    result = result or {}
+
+    filename = result.get("out_name") or ""
+    pdf_path = _resolve_file_path(file_id) or resolve_pdf_path(filename)
+    if not pdf_path:
+        _set_result_error(file_id, "pdf_open_failed: file_not_found")
+        message = "Datei nicht gefunden."
+        if _is_ajax_request():
+            return jsonify({"ok": False, "message": message}), 404
+        flash(message)
+        return redirect(url_for("index"))
+
+    doc_number_input = request.form.get("doc_number_input", "")
+    doc_number = _normalize_doc_number_input(doc_number_input)
+    if len(doc_number) < 1:
+        message = "Dokumentnummer ungültig."
+        if _is_ajax_request():
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message)
+        return redirect(url_for("index"))
+
+    supplier = (result.get("supplier") or "").strip() or "Unbekannt"
+    date_str = (result.get("date") or "").strip()
+    date_obj = None
+    if date_str:
+        try:
+            date_obj = datetime.strptime(date_str, INTERNAL_DATE_FORMAT)
+        except ValueError:
+            date_obj = None
+
+    original_path = str(pdf_path)
+    new_name = filename
+    target_path = pdf_path
+
+    if date_obj:
+        new_filename = build_new_filename(
+            supplier,
+            date_obj,
+            delivery_note_nr=doc_number,
+            date_format=INTERNAL_DATE_FORMAT,
+        )
+        moved_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+        if move_error or not moved_path:
+            _set_result_error(file_id, f"rename_failed: {move_error}")
+        else:
+            target_path = moved_path
+            new_name = target_path.name
+            _set_session_file_entry(file_id, target_path, target_path.name)
+
+    _update_last_results_doc_number(file_id, new_name, doc_number)
+
+    synced_path, sync_error = _sync_pdf_location(file_id, target_path)
+    if sync_error:
+        _set_result_error(file_id, f"move_failed: {sync_error}")
+    elif synced_path:
+        target_path = synced_path
+        if target_path.name != new_name:
+            new_name = target_path.name
+
+    # Auto-Sort nach manueller Korrektur nachholen
+    try:
+        settings = _get_auto_sort_settings()
+        current = _result_for_file_id(file_id) or {}
+        if settings.enabled and not bool(current.get("quarantined")) and target_path and target_path.exists():
+            _auto_sort_pdf(current, target_path)
+    except Exception as exc:
+        logger.warning(f"Auto-sort after confirm_doc_number failed: {exc}")
+
+    _append_history(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "file_id": file_id,
+            "original_path": original_path,
+            "new_path": str(target_path or ""),
+            "filename_before": filename,
+            "filename_after": new_name,
+            "action_type": "confirm_doc_number",
+            "doc_number_before": result.get("doc_number") or "",
+            "doc_number_after": doc_number,
+        }
+    )
+
+    message = "Dokumentnummer gespeichert."
+    if new_name and new_name != filename:
+        message = f"Umbenannt zu: {new_name}"
+
+    if _is_ajax_request():
+        return jsonify(_row_payload(file_id, message=message))
+    flash(message)
+    return redirect(url_for("index"))
+
+
+@app.post("/confirm_doc_number_from_view")
+def confirm_doc_number_from_view():
+    file_id = request.form.get("file_id", "").strip()
+    if not file_id:
+        abort(404)
+    result = _result_for_file_id(file_id)
+    if not result:
+        abort(404)
+    result = result or {}
+    filename = result.get("out_name") or ""
+
+    pdf_path = _resolve_file_path(file_id) or resolve_pdf_path(filename)
+    if not pdf_path:
+        _set_result_error(file_id, "pdf_open_failed: file_not_found")
+        return _render_view_pdf(file_id, pdf_missing=True), 404
+
+    doc_number_input = request.form.get("doc_number_input", "")
+    doc_number = _normalize_doc_number_input(doc_number_input)
+    if len(doc_number) < 1:
+        flash("Dokumentnummer ungültig.")
+        return redirect(url_for("view_pdf", file_id=file_id))
+
+    supplier = (result.get("supplier") or "").strip() or "Unbekannt"
+    date_str = (result.get("date") or "").strip()
+    date_obj = None
+    if date_str:
+        try:
+            date_obj = datetime.strptime(date_str, INTERNAL_DATE_FORMAT)
+        except ValueError:
+            date_obj = None
+
+    original_path = str(pdf_path)
+    new_name = filename
+    target_path = pdf_path
+
+    # Rename only if we have a usable date; otherwise just persist the doc number.
+    if date_obj:
+        new_filename = build_new_filename(
+            supplier,
+            date_obj,
+            delivery_note_nr=doc_number,
+            date_format=INTERNAL_DATE_FORMAT,
+        )
+        moved_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+        if move_error or not moved_path:
+            flash("Dokumentnummer gespeichert, aber Umbenennen fehlgeschlagen.")
+        else:
+            target_path = moved_path
+            new_name = target_path.name
+            _set_session_file_entry(file_id, target_path, target_path.name)
+
+    _update_last_results_doc_number(file_id, new_name, doc_number)
+
+    synced_path, sync_error = _sync_pdf_location(file_id, target_path)
+    if sync_error:
+        _set_result_error(file_id, f"move_failed: {sync_error}")
+    elif synced_path:
+        target_path = synced_path
+        if target_path.name != new_name:
+            new_name = target_path.name
+
+    # Auto-Sort nach manueller Korrektur nachholen
+    try:
+        settings = _get_auto_sort_settings()
+        current = _result_for_file_id(file_id) or {}
+        if settings.enabled and not bool(current.get("quarantined")) and target_path and target_path.exists():
+            _auto_sort_pdf(current, target_path)
+    except Exception as exc:
+        logger.warning(f"Auto-sort after confirm_doc_number_from_view failed: {exc}")
+
+    _append_history(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "file_id": file_id,
+            "original_path": original_path,
+            "new_path": str(target_path or ""),
+            "filename_before": filename,
+            "filename_after": new_name,
+            "action_type": "confirm_doc_number",
+            "doc_number_before": result.get("doc_number") or "",
+            "doc_number_after": doc_number,
+        }
+    )
+
+    if new_name and new_name != filename:
+        flash(f"Umbenannt zu: {new_name}")
+    flash("Dokumentnummer gespeichert.")
+    return redirect(url_for("view_pdf", file_id=file_id))
+
+
+@app.post("/confirm_doc_type_from_view")
+def confirm_doc_type_from_view():
+    file_id = request.form.get("file_id", "").strip()
+    if not file_id:
+        abort(404)
+    result = _result_for_file_id(file_id)
+    if not result:
+        abort(404)
+
+    raw_val = (request.form.get("doc_type", "") or "").strip()
+    # Accept a small, explicit set.
+    allowed = {
+        "RECHNUNG",
+        "LIEFERSCHEIN",
+        "ÜBERNAHMESCHEIN",
+        "KOMMISSIONIERLISTE",
+        "SONSTIGES",
+    }
+    if raw_val not in allowed:
+        flash("Dokumenttyp ungültig.")
+        return redirect(url_for("view_pdf", file_id=file_id))
+
+    before = result.get("doc_type") or ""
+    _update_last_results_doc_type(file_id, raw_val)
+
+    _append_history(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "file_id": file_id,
+            "action_type": "confirm_doc_type",
+            "doc_type_before": before,
+            "doc_type_after": raw_val,
+        }
+    )
+    flash("Dokumenttyp gespeichert.")
+    return redirect(url_for("view_pdf", file_id=file_id))
 
 
 @app.post("/undo_last")

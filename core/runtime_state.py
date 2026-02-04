@@ -103,7 +103,12 @@ def reset_runtime_state_once(cfg: RuntimeStateConfig, marker_path: Path | None =
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         if marker_path.exists():
             existing = marker_path.read_text(encoding="utf-8").strip()
-            if invocation_id and existing.startswith(invocation_id):
+            if invocation_id:
+                if existing.startswith(invocation_id):
+                    return False
+            else:
+                # Fallback: if no systemd invocation id is available,
+                # only reset once per marker file presence.
                 return False
     except Exception:
         # Best-effort: if we can't read the marker, continue and reset.
