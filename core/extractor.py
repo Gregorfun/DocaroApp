@@ -659,6 +659,15 @@ def _render_pdf_images(
     pages: int = 1,
 ) -> Tuple[List[object], str]:
     pages = max(1, min(pages, 5))
+
+    # Optional: force PyMuPDF rendering (avoids Poppler dependency)
+    force_pymupdf = os.getenv("DOCARO_RENDER_BACKEND", "").strip().lower() in {"pymupdf", "fitz"}
+    if force_pymupdf:
+        images, err = _render_pdf_images_pymupdf(pdf_path, pages=pages)
+        if images:
+            return images, ""
+        return [], err or "pymupdf_render_failed"
+
     try:
         try:
             images = convert_from_path(
@@ -678,13 +687,58 @@ def _render_pdf_images(
                 poppler_path=str(poppler_bin) if poppler_bin else None,
             )
     except PDFInfoNotInstalledError:
+        images, err = _render_pdf_images_pymupdf(pdf_path, pages=pages)
+        if images:
+            return images, ""
         return [], "Poppler/pdfinfo nicht gefunden - installiere Poppler oder setze DOCARO_POPPLER_BIN"
     except (PDFPageCountError, PDFSyntaxError) as exc:
         return [], f"pdf_read_failed: {exc}"
     except Exception as exc:
+        images, err = _render_pdf_images_pymupdf(pdf_path, pages=pages)
+        if images:
+            return images, ""
         return [], f"pdf_convert_failed: {exc}"
     if not images:
         return [], "Keine Seiten im PDF gefunden."
+    return images, ""
+
+
+def _render_pdf_images_pymupdf(pdf_path: Path, pages: int = 1) -> Tuple[List[object], str]:
+    """Render PDF pages to PIL images using PyMuPDF (fitz).
+
+    Returns (images, error). Must never raise.
+    """
+    pages = max(1, min(pages, 5))
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:
+        return [], f"pymupdf_not_available: {exc}"
+
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception as exc:
+        return [], f"pymupdf_open_failed: {exc}"
+
+    images: List[object] = []
+    try:
+        scale = 300.0 / 72.0
+        matrix = fitz.Matrix(scale, scale)
+        max_page = min(pages, doc.page_count)
+        for page_index in range(max_page):
+            page = doc.load_page(page_index)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            images.append(img)
+    except Exception as exc:
+        return [], f"pymupdf_render_failed: {exc}"
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    if not images:
+        return [], "pymupdf_no_pages"
     return images, ""
 
 

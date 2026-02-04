@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -76,3 +78,45 @@ def reset_runtime_state(cfg: RuntimeStateConfig) -> None:
     # Logs: clear file contents, keep directory
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     _clear_directory_contents(cfg.log_dir, preserve)
+
+
+def reset_runtime_state_once(cfg: RuntimeStateConfig, marker_path: Path | None = None) -> bool:
+    """Reset runtime state at most once per systemd service invocation.
+
+    Gunicorn with multiple workers (and worker restarts) imports the app module
+    in each worker process. Calling :func:`reset_runtime_state` unconditionally
+    from module import time can therefore erase in-flight uploads or recently
+    processed outputs whenever a worker restarts.
+
+    This helper uses systemd's ``INVOCATION_ID`` (when available) to ensure the
+    reset happens only once per service start.
+
+    Returns:
+        True if a reset was performed, False if skipped.
+    """
+
+    invocation_id = (os.getenv("INVOCATION_ID") or "").strip()
+    if marker_path is None:
+        marker_path = cfg.data_dir / ".runtime_reset_invocation"
+
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        if marker_path.exists():
+            existing = marker_path.read_text(encoding="utf-8").strip()
+            if invocation_id and existing.startswith(invocation_id):
+                return False
+    except Exception:
+        # Best-effort: if we can't read the marker, continue and reset.
+        pass
+
+    reset_runtime_state(cfg)
+
+    try:
+        stamp = f"{invocation_id}\n{int(time.time())}\n"
+        tmp_path = marker_path.with_suffix(".tmp")
+        tmp_path.write_text(stamp, encoding="utf-8")
+        tmp_path.replace(marker_path)
+    except Exception:
+        pass
+
+    return True

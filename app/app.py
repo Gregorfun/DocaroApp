@@ -70,6 +70,8 @@ def get_docling_extractor():
         return None
 from utils import normalize_text
 from config import Config
+from redis import Redis
+from rq import Queue
 from services.auto_sort import (
     AutoSortSettings,
     decide_auto_sort,
@@ -78,7 +80,7 @@ from services.auto_sort import (
     save_settings as save_auto_sort_settings,
     sanitize_supplier_name,
 )
-from core.runtime_state import RuntimeStateConfig, reset_runtime_state
+from core.runtime_state import RuntimeStateConfig, reset_runtime_state, reset_runtime_state_once
 from services.web_auth import install_auth
 from core.performance import profile
 from functools import lru_cache
@@ -96,23 +98,32 @@ SESSION_FILES_LOCK = config.SESSION_FILES_LOCK
 HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 
-# Stateless: Beim Start immer Runtime-State löschen (keine Dokument-/Dashboard-Persistenz)
-reset_runtime_state(
-    RuntimeStateConfig(
-        repo_root=BASE_DIR,
-        data_dir=DATA_DIR,
-        runtime_dirs=(TMP_DIR, INBOX_DIR, OUT_DIR, QUARANTINE_DIR),
-        runtime_files=(
-            SESSION_FILES_PATH,
-            SESSION_FILES_LOCK,
-            SUPPLIER_CORRECTIONS_PATH,
-            HISTORY_PATH,
-            config.SETTINGS_PATH,
-        ),
-        log_dir=LOG_DIR,
-        preserve_dirs=(BASE_DIR / "ml", config.AUTH_DIR),
+# Setup Redis Queue
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+redis_conn = Redis.from_url(redis_url)
+q = Queue('default', connection=redis_conn, default_timeout=3600)  # 1h timeout
+
+# Stateless (optional): Runtime-State beim Service-Start löschen.
+# WICHTIG: Unter Gunicorn laufen mehrere Worker-Prozesse; ein Reset pro Worker-Start
+# kann Uploads/Outputs löschen, sobald ein Worker neu startet. Deshalb nur 1x pro
+# systemd INVOCATION_ID resetten.
+if os.getenv("DOCARO_STATELESS", "1") == "1":
+    reset_runtime_state_once(
+        RuntimeStateConfig(
+            repo_root=BASE_DIR,
+            data_dir=DATA_DIR,
+            runtime_dirs=(TMP_DIR, INBOX_DIR, OUT_DIR, QUARANTINE_DIR),
+            runtime_files=(
+                SESSION_FILES_PATH,
+                SESSION_FILES_LOCK,
+                SUPPLIER_CORRECTIONS_PATH,
+                HISTORY_PATH,
+                config.SETTINGS_PATH,
+            ),
+            log_dir=LOG_DIR,
+            preserve_dirs=(BASE_DIR / "ml", config.AUTH_DIR),
+        )
     )
-)
 
 
 @atexit.register
@@ -716,11 +727,12 @@ def upload():
 
         # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
         _set_processing(True)
-        threading.Thread(
-            target=_background_process_upload,
+        q.enqueue(
+            background_process_upload,
             args=(upload_dir, date_fmt),
-            daemon=True,
-        ).start()
+            job_timeout='1h',
+            result_ttl=86400
+        )
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("upload:handler", exc)
@@ -825,8 +837,8 @@ def _is_processing() -> bool:
     except OSError:
         return False
 
-def _background_process_upload(upload_dir: Path, date_fmt: str) -> None:
-    _background_process_folder(upload_dir, date_fmt=date_fmt, cleanup_input_dir=True, log_context="upload:bg_worker")
+def background_process_upload(upload_dir: Path, date_fmt: str) -> None:
+    background_process_folder(upload_dir, date_fmt=date_fmt, cleanup_input_dir=True, log_context="upload:bg_worker")
 
 
 @app.post("/process_inbox")
@@ -848,12 +860,13 @@ def process_inbox():
 
         _set_progress(total=len(pdfs), done=0)
         _set_processing(True)
-        threading.Thread(
-            target=_background_process_folder,
+        q.enqueue(
+            background_process_folder,
             args=(INBOX_DIR, date_fmt),
             kwargs={"cleanup_input_dir": False, "log_context": "inbox:bg_worker"},
-            daemon=True,
-        ).start()
+            job_timeout='1h',
+            result_ttl=86400
+        )
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("inbox:handler", exc)
@@ -861,7 +874,7 @@ def process_inbox():
 
 
 @profile(threshold_seconds=2.0)
-def _background_process_folder(
+def background_process_folder(
     input_dir: Path,
     date_fmt: str,
     cleanup_input_dir: bool = False,

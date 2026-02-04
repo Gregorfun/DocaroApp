@@ -4,6 +4,7 @@ Gemeinsame Hilfsfunktionen für Docaro.
 
 import re
 import shlex
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -39,4 +40,9 @@ def has_pdfinfo(bin_dir: Path) -> bool:
     """Prüft, ob pdfinfo in einem Verzeichnis vorhanden ist."""
     if not bin_dir or not bin_dir.exists():
         return False
-    return (bin_dir / "pdfinfo.exe").exists() or (bin_dir / "pdfinfo").exists()
+    # Unter Linux/Unix ist die ausführbare Datei typischerweise "pdfinfo".
+    # Das Repo enthält zusätzlich Windows-Binaries ("pdfinfo.exe"), die auf Linux
+    # zwar existieren, aber nicht ausführbar sind. Deshalb OS-aware prüfen.
+    if os.name == "nt":
+        return (bin_dir / "pdfinfo.exe").exists() or (bin_dir / "pdfinfo").exists()
+    return (bin_dir / "pdfinfo").exists()

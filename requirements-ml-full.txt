@@ -1,0 +1,56 @@
+# ================================================================
+# Vollständiger ML/Training/Monitoring Stack (sehr groß!)
+#
+# WARNUNG:
+# - Kann mehrere GB belegen (Torch + evtl. CUDA/NVIDIA Wheels, Label-Studio, Chroma, etc.)
+# - Auf kleinen Servern (z.B. 10GB Disk, /tmp als tmpfs) führt das schnell zu "No space left".
+#
+# Installation (empfohlen "ruhig" + TMPDIR auf Platte):
+#   mkdir -p /opt/docaro/data/tmp /opt/docaro/data/logs
+#   nohup env TMPDIR=/opt/docaro/data/tmp PIP_NO_CACHE_DIR=1 \
+#     /opt/docaro/.venv/bin/pip install -r /opt/docaro/requirements-ml-full.txt --no-input --progress-bar off \
+#     > /opt/docaro/data/logs/ml_full_install.log 2>&1 &
+# ================================================================
+
+# Machine Learning Core
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Deep Learning
+torch>=2.1.0
+transformers>=4.35.0
+
+# Named-Entity-Recognition
+# (zieht Torch/Transformers)
+gliner
+
+# Embeddings & Semantic Search
+sentence-transformers>=2.2.0
+qdrant-client>=1.7.0
+chromadb>=0.4.0
+
+# MLOps & Experiment-Tracking
+mlflow>=2.9.0
+optuna>=3.5.0
+
+# Docling (fortgeschrittene Dokumentenverarbeitung)
+docling>=0.12.0
+docling-core>=2.50.0
+
+# KI-OCR Fallback
+paddleocr
+
+# Label Studio
+label-studio>=1.10.0
+label-studio-sdk>=0.0.30
+
+# Monitoring & Logging
+tensorboard>=2.15.0
+wandb>=0.16.0
+
+# Additional Tools
+joblib>=1.3.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.18.0

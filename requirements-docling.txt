@@ -1,0 +1,11 @@
+# Docling (fortgeschrittene Dokumentenverarbeitung)
+#
+# HINWEIS:
+# - docling kann Torch/Torchvision und damit sehr große Wheels nachziehen.
+# - Auf kleinen Servern: erst disk checken und TMPDIR auf Platte setzen.
+
+# Kernbibliothek (leichter als docling full):
+docling-core>=2.50.0
+
+# Vollpaket (zieht Modelle/Extras):
+docling>=0.12.0

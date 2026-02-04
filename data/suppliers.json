@@ -87,6 +87,22 @@
         "GMBH Sachbearbeiter Herr KUNDENBESTELLUNG"
       ],
       "created_at": "2026-02-01T21:22:50"
+    },
+    {
+      "name": "LKQ PV AUTOMOTIVE",
+      "aliases": [
+        "GMBH Sachbearbeiter Herr KUNDENBESTELLUNG"
+      ],
+      "created_at": "2026-02-04T10:19:26"
+    },
+    {
+      "name": "Franz Bracht",
+      "aliases": [
+        "Franz Bracht Kran-Vermietung GmbH",
+        "Liebherr-Werk Ehingen GmbH, Postfach 13 61, 89582 Ehingen",
+        "| | KS-Logistic GmbH & Co. KG | KS-Resyollng GmbH & Un. KG |"
+      ],
+      "created_at": "2026-02-04T10:19:27"
     }
   ]
 }

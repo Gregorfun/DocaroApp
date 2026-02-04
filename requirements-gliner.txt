@@ -1,0 +1,12 @@
+# GLiNER (Named Entity Recognition)
+#
+# WARNUNG:
+# - GLiNER benötigt Torch + Transformers.
+# - pip von PyPI kann auf Linux CUDA/NVIDIA Wheels nachziehen (sehr groß).
+#
+# Empfehlung (CPU-only Torch):
+#   /opt/docaro/.venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+#   /opt/docaro/.venv/bin/pip install -r /opt/docaro/requirements-gliner.txt
+
+transformers>=4.35.0
+gliner

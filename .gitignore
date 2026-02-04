@@ -41,3 +41,10 @@ problem.png
 
 # Secrets
 .env
+
+# Local machine / sensitive
+.cache/
+.ssh/
+.gitconfig
+data/.secret_key
+data/.runtime_reset_invocation

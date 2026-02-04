@@ -23,7 +23,7 @@ class Config:
     SESSION_FILES_LOCK = DATA_DIR / "session_files.lock"
     HISTORY_PATH = DATA_DIR / "history.jsonl"
     SECRET_KEY_FILE = DATA_DIR / ".secret_key"
-    SECRET_KEY = os.getenv("DOCARO_SECRET_KEY") or Config._get_or_create_secret_key()
+    SECRET_KEY: str | None = None
     DEBUG = os.getenv("DOCARO_DEBUG") == "1"
     OCR_TIMEOUT_SECONDS = int(os.getenv("DOCARO_OCR_TIMEOUT", "8"))
     PDF_CONVERT_TIMEOUT = int(os.getenv("DOCARO_PDF_CONVERT_TIMEOUT", "15"))
@@ -105,3 +105,8 @@ class Config:
             logger.addHandler(console_handler)
 
         return logger
+
+
+# SECRET_KEY muss nach der Klassendefinition initialisiert werden,
+# weil der Name "Config" innerhalb des Klassen-Bodys noch nicht gebunden ist.
+Config.SECRET_KEY = os.getenv("DOCARO_SECRET_KEY") or Config._get_or_create_secret_key()

@@ -1,0 +1,8 @@
+# PaddleOCR (optional OCR-Fallback)
+#
+# Installation kann groß sein, aber meist deutlich kleiner als Torch/CUDA.
+# Empfohlen mit TMPDIR auf Platte.
+
+numpy>=1.24.0
+pillow
+paddleocr

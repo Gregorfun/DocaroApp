@@ -6,15 +6,13 @@ pillow
 python-dateutil
 PyPDF2
 pdfplumber
+PyYAML
 
-# Docling für fortgeschrittene Dokumentenverarbeitung
-docling>=0.12.0
-# Docling-core für DoclingDocument, Chunking, Serialization
-docling-core>=2.50.0
+# Hinweis: Schwere ML-Dependencies (Docling/PaddleOCR/MLflow/etc.) sind bewusst
+# NICHT in den Runtime-Requirements, um Server-Start/Updates stabil zu halten.
+# Nutze dafür requirements-ml.txt.
+rq
+redis
 
-# Optional (KI-OCR Fallback für schwierige Scan-PDFs):
-paddleocr
-numpy
-
-# Optional (Experiment Tracking / ML Ops):
-mlflow
+# Optional (schnelleres PDF-Rendering ohne Poppler):
+pymupdf
