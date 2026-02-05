@@ -2791,7 +2791,9 @@ def confirm_all_from_view():
         logger.warning(f"Supplier DB update in confirm_all_from_view failed: {exc}")
 
     date_input = (request.form.get("date_input", "") or "").strip()
-    date_fmt = (request.form.get("date_fmt", "") or "").strip()
+    # The UI lets the user choose the date format. We use that format for
+    # the filename label, but always persist the normalized ISO date internally.
+    date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
     date_iso = (result.get("date") or "").strip()
     date_obj = None
     if date_input:
@@ -2836,7 +2838,8 @@ def confirm_all_from_view():
             supplier_name or "Unbekannt",
             date_obj,
             delivery_note_nr=doc_number or None,
-            date_format=INTERNAL_DATE_FORMAT,
+            # Label with the user-selected date format.
+            date_format=date_fmt if date_fmt in ALLOWED_DATE_FORMATS else INTERNAL_DATE_FORMAT,
         )
         moved_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
         if move_error or not moved_path:
@@ -3019,7 +3022,9 @@ def suppliers_rename():
     data["suppliers"] = suppliers_list
     save_suppliers_db(data)
     flash("Lieferant aktualisiert.")
-    return redirect(url_for("suppliers"))
+    # Redirect mit Anchor zur geänderten Zeile
+    anchor = new_name.replace(" ", "-").replace("/", "-").lower()
+    return redirect(url_for("suppliers") + f"#supplier-{anchor}")
 
 
 @app.post("/suppliers/alias/add")
@@ -3041,7 +3046,9 @@ def suppliers_alias_add():
     data["suppliers"] = suppliers_list
     save_suppliers_db(data)
     flash("Alias gespeichert.")
-    return redirect(url_for("suppliers"))
+    # Redirect mit Anchor zur geänderten Zeile
+    anchor = supplier_name.replace(" ", "-").replace("/", "-").lower()
+    return redirect(url_for("suppliers") + f"#supplier-{anchor}")
 
 
 @app.post("/suppliers/alias/remove")
@@ -3064,7 +3071,9 @@ def suppliers_alias_remove():
     data["suppliers"] = suppliers_list
     save_suppliers_db(data)
     flash("Alias entfernt.")
-    return redirect(url_for("suppliers"))
+    # Redirect mit Anchor zur geänderten Zeile
+    anchor = supplier_name.replace(" ", "-").replace("/", "-").lower()
+    return redirect(url_for("suppliers") + f"#supplier-{anchor}")
 
 
 @app.post("/suppliers/delete")
@@ -3183,10 +3192,26 @@ def download_all():
                         _auto_sort_pdf(item, pdf_path)
                     except Exception as exc:
                         logger.warning(f"Auto-sort in download_all failed for {out_name}: {exc}")
+
+        # Results können durch _auto_sort_pdf (export_path) aktualisiert worden sein.
+        # Für die ZIP-Erstellung laden wir deshalb den neuesten Stand erneut.
+        results = _load_last_results() or []
     
     pdfs = []
+    results_by_out_name = {str(item.get("out_name") or "").strip(): item for item in (results or [])}
     for name in filenames:
-        path = resolve_pdf_path(name)
+        path = None
+
+        # Wenn Auto-Sort gelaufen ist, steht export_path i.d.R. auf dem endgültigen Ziel.
+        item = results_by_out_name.get(name)
+        export_path_val = (item.get("export_path") or "").strip() if item else ""
+        if export_path_val:
+            candidate = Path(export_path_val)
+            if candidate.exists():
+                path = candidate
+
+        if not path:
+            path = resolve_pdf_path(name)
         if path and path.exists():
             pdfs.append(path)
     if not pdfs:
