@@ -423,7 +423,9 @@ ORDER_KEYWORDS = [
 ]
 
 _DOCNO_TOKEN = re.compile(r"\b([A-Z0-9][A-Z0-9\-/]{2,})\b", re.IGNORECASE)
-_LIEFERSCHEIN_TITLE_NO = re.compile(r"\blieferschein\b[^0-9\n]{0,12}(\d{7,10})\b", re.IGNORECASE)
+# Liebherr-spezifisch: Lieferschein gefolgt von 8-10 Ziffern, auch über Zeilenumbrüche hinweg
+_LIEBHERR_LIEFERSCHEIN = re.compile(r"lieferschein[\s:]*([\d\s]{8,12})", re.IGNORECASE | re.DOTALL)
+_LIEFERSCHEIN_TITLE_NO = re.compile(r"\blieferschein\b[^0-9]{0,25}(\d{7,10})\b", re.IGNORECASE | re.DOTALL)
 _DATE_LIKE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b")
 _IBAN_LIKE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _PHONE_LIKE = re.compile(r"\b\+?\d[\d /()\-]{6,}\d\b")
@@ -496,6 +498,16 @@ def extract_document_numbers(text: str) -> Dict[str, object]:
     """
 
     combined = text or ""
+
+    # Liebherr-spezifisches Pattern: "Lieferschein" gefolgt von Ziffern (mit Zeilenumbrüchen)
+    m = _LIEBHERR_LIEFERSCHEIN.search(combined)
+    if m:
+        # Entferne alle Whitespace-Zeichen aus der Zifferngruppe
+        digits = re.sub(r"\s", "", m.group(1))
+        if len(digits) >= 7 and len(digits) <= 10:
+            cand = _clean_doc_number(digits)
+            if _is_plausible_doc_number(cand, allow_5digit_numeric=False):
+                return {"delivery_note_no": cand, "order_no": None, "confidence": "high"}
 
     # Spezielles Muster: "Lieferschein 200541642" (ohne "-Nr" Label)
     # (häufig bei Hersteller-Lieferscheinen wie Liebherr)
@@ -1716,9 +1728,18 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
         "uebernahme",
         "kommissionierliste",
         "lieferadresse",
+        "lieferadressat",
+        "rechnungsadresse",
         "rechnungsadresse",
         "lieferanschrift",
         "lieferschein",
+        "lieferscheinnr",
+        "versand",
+        "versand-",
+        "empfaenger",
+        "adressat",
+        "adresse",
+        "datum",
     ]
     endings = [
         "gmbh",
@@ -1859,35 +1880,42 @@ def detect_supplier_detailed(
         pass
 
     # Hard Fix Liebherr: nur wenn im Header/Letterhead (nicht Recipient-only)
+    # Liebherr als ERSTES einfügen (höchste Priorität vor Heuristik)
+    # Wichtig: Liebherr immer auf 0.995 setzen, um Franz Bracht (Heuristik 0.7) zu überschreiben
     header_norm = _normalize_supplier_text(header_text)
-    if (
+    liebherr_detected = (
         "liebherr" in header_norm
         or "liebherr werk" in header_norm
         or "werk ehingen" in header_norm
         or "www.liebherr.com" in header_norm
-    ):
-        candidates.append(
+    )
+    
+    if liebherr_detected:
+        candidates.insert(
+            0,
             {
                 "canonical": "Liebherr",
-                "confidence": 0.98,
-                "source": "hardfix",
-                "matched": "Liebherr(header)",
+                "confidence": 0.995,  # Sehr hoch, damit Heuristik nicht gewinnt
+                "source": "hardfix_liebherr",
+                "matched": "Liebherr(header_detected)",
                 "segment": "header",
             }
         )
 
     # Heuristik nur auf header/body, nicht auf recipient
-    guess, guess_line, guess_conf = _heuristic_supplier(header_text + "\n" + body_text)
-    if guess:
-        candidates.append(
-            {
-                "canonical": _canonicalize_supplier(guess),
-                "confidence": float(guess_conf or 0.0),
-                "source": "heuristic",
-                "matched": guess_line or guess,
-                "segment": "header" if _normalize_supplier_text(guess_line or "") in header_norm else "body",
-            }
-        )
+    # ABER: wenn Liebherr im Header erkannt wurde, nicht die Heuristik laufen lassen
+    if not liebherr_detected:
+        guess, guess_line, guess_conf = _heuristic_supplier(header_text + "\n" + body_text)
+        if guess:
+            candidates.append(
+                {
+                    "canonical": _canonicalize_supplier(guess),
+                    "confidence": float(guess_conf or 0.0),
+                    "source": "heuristic",
+                    "matched": guess_line or guess,
+                    "segment": "header" if _normalize_supplier_text(guess_line or "") in header_norm else "body",
+                }
+            )
 
     # Apply segment penalty
     for c in candidates:
