@@ -96,16 +96,12 @@ def _get_paddleocr_instance():
         return PADDLEOCR_INSTANCE
     try:
         import os as _os
-        # Disable GPU bei Speichermangel
+        # Disable GPU bei Speichermangel + model source check
         _os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
         from paddleocr import PaddleOCR
-        PADDLEOCR_INSTANCE = PaddleOCR(
-            use_angle_cls=True,
-            lang=['german'],
-            use_gpu=False,  # CPU nur (GPU kann zu viel RAM brauchen)
-            show_log=False
-        )
-        _LOGGER.info("PaddleOCR initialized successfully")
+        # PaddleOCR 3.4.0: Minimal config, defaults nutzen
+        PADDLEOCR_INSTANCE = PaddleOCR(lang='en')  # 'en' für westliche Sprachen
+        _LOGGER.info("PaddleOCR initialized successfully (lang=en)")
     except Exception as e:
         _LOGGER.warning(f"Failed to initialize PaddleOCR: {e}")
         PADDLEOCR_INSTANCE = False  # Mark as failed
