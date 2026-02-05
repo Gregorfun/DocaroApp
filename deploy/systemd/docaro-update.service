@@ -1,0 +1,7 @@
+[Unit]
+Description=Nightly Docaro update from Git and restart
+
+[Service]
+Type=oneshot
+Environment=DOCARO_UPDATE_REBOOT=1
+ExecStart=/usr/local/bin/docaro-update.sh

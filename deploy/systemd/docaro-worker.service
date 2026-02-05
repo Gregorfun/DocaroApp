@@ -1,0 +1,17 @@
+[Unit]
+Description=Docaro RQ Worker
+After=redis-server.service network.target
+
+[Service]
+Type=simple
+User=docaro
+Group=docaro
+WorkingDirectory=/opt/docaro
+EnvironmentFile=/etc/docaro/docaro.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/docaro/.venv/bin/python /opt/docaro/services/worker.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

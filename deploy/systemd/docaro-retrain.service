@@ -1,0 +1,18 @@
+[Unit]
+Description=Docaro ML Model Retraining
+After=network.target
+
+[Service]
+Type=oneshot
+User=docaro
+Group=docaro
+WorkingDirectory=/opt/docaro
+EnvironmentFile=/etc/docaro/docaro.env
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 /opt/docaro/ml/retrain_scheduler.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docaro-retrain
+
+[Install]
+WantedBy=multi-user.target

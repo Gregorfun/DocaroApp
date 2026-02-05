@@ -80,6 +80,20 @@ suppliers:
       - "Projekt-Nr"
     doc_type_overrides: {}
 
+  KSR:
+    # KSR Lieferscheine/Entsorgung: relevante Referenz ist oft die Auftragsnummer (AUF...)
+    doc_number_fields:
+      - "Auftragsnummer"
+      - "Auftrag"
+      - "Auftrag-Nr"
+      - "Auftrags-Nr"
+      - "AUF"
+    secondary_fields:
+      - "Lieferschein"
+      - "Lieferschein-Nr"
+      - "Lieferscheinnr"
+    doc_type_overrides: {}
+
   # Neue Supplier
   Foerch:
     doc_number_fields:

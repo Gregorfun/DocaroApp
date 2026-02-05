@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+from pathlib import Path
 from redis import Redis
 from rq import Worker, Queue
 
@@ -8,8 +9,9 @@ from rq import Worker, Queue
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Prepend project root to sys.path so we can import app
-sys.path.insert(0, '/opt/docaro')
+# Prepend project root to sys.path so imports work regardless of install path
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 listen = ['high', 'default', 'low']
 os.environ.setdefault("DOCARO_WORKER", "1")

@@ -13,6 +13,7 @@ from core.extractor import (
     extract_date,
     extract_date_with_priority,
     detect_supplier,
+    detect_supplier_detailed,
     normalize_text,
     load_suppliers_db,
     build_new_filename,
@@ -93,6 +94,17 @@ class TestSupplierDetection(unittest.TestCase):
         supplier1, _, _, _ = detect_supplier("vergoelst")
         supplier2, _, _, _ = detect_supplier("VERGOELST")
         self.assertEqual(supplier1, supplier2)
+
+    def test_detect_supplier_ksr_from_befoerderer(self):
+        text = """
+        Lieferschein
+        Kunde: Franz Bracht
+
+        Beförderer: KS- Logistic GmbH & Co KG
+        """
+        supplier, confidence, source, matched, cands = detect_supplier_detailed(text)
+        self.assertEqual(supplier, "KSR")
+        self.assertTrue(confidence > 0.0)
 
 
 class TestNormalizeText(unittest.TestCase):

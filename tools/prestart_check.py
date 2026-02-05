@@ -159,6 +159,7 @@ def main() -> int:
     required_py.extend(
         [
             _check_import("flask", "flask"),
+            _check_import("gunicorn", "gunicorn"),
             _check_import("argon2", "argon2-cffi"),
             _check_import("pdf2image", "pdf2image"),
             _check_import("pytesseract", "pytesseract"),
@@ -220,6 +221,7 @@ def main() -> int:
             checks.extend(
                 [
                     _check_import("flask", "flask"),
+                    _check_import("gunicorn", "gunicorn"),
                     _check_import("argon2", "argon2-cffi"),
                     _check_import("pdf2image", "pdf2image"),
                     _check_import("pytesseract", "pytesseract"),

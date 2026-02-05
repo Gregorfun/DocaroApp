@@ -1,0 +1,12 @@
+{
+  "suppliers": [
+    {
+      "name": "Beispiel GmbH",
+      "aliases": ["Beispiel", "Beispiel-GmbH"]
+    },
+    {
+      "name": "KSR",
+      "aliases": ["KSR", "KS- Logistic", "KS Logistic"]
+    }
+  ]
+}

@@ -9,64 +9,117 @@
   <body class="viewer-body">
     <main class="viewer-shell">
       <div class="viewer-toolbar">
-        <form action="{{ url_for('confirm_supplier') }}" method="post" class="viewer-form">
-          <span class="viewer-label">Lieferant:</span>
-          <input
-            class="viewer-input"
-            type="text"
-            name="supplier_input"
-            placeholder="Lieferant eingeben"
-            value="{{ supplier if supplier and supplier != 'Unbekannt' else '' }}"
-          />
+        <div class="viewer-topbar">
+          <div class="viewer-title" title="{{ filename }}">{{ filename }}</div>
+          <div class="viewer-topbar-right">
+            <a class="viewer-link" href="{{ url_for('upload_overview') }}">Übersicht</a>
+            <a class="viewer-link" href="{{ url_for('review_next', current=file_id) }}">Weiter</a>
+            {% if review_total %}
+              <span class="viewer-badge">{{ review_index or 1 }}/{{ review_total }}</span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <div class="viewer-flash" role="status" aria-live="polite">{{ messages[0] }}</div>
+          {% endif %}
+        {% endwith %}
+
+        <div class="viewer-metadata-panel">
+          <div class="metadata-grid">
+            <div class="metadata-item">
+              <span class="metadata-label">Lieferant</span>
+              <span class="metadata-value">{{ supplier or '-' }}</span>
+            </div>
+            <div class="metadata-item">
+              <span class="metadata-label">Datum</span>
+              <span class="metadata-value">{{ date_value or '-' }}</span>
+            </div>
+            <div class="metadata-item">
+              <span class="metadata-label">Lieferscheinnr.</span>
+              <span class="metadata-value">{{ doc_number or '-' }}</span>
+            </div>
+            <div class="metadata-item">
+              <span class="metadata-label">Dokumenttyp</span>
+              <span class="metadata-value">{{ doc_type or '-' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <form action="{{ url_for('confirm_all_from_view') }}" method="post" class="viewer-controls viewer-controls-form">
           <input type="hidden" name="file_id" value="{{ file_id }}" />
           <input type="hidden" name="supplier_guess_line" value="{{ supplier_guess_line }}" />
-          <input type="hidden" name="return_to" value="viewer" />
-          {% if supplier_guess_line %}
-            <label class="viewer-checkbox">
-              <input type="checkbox" name="alias_from_ocr" value="1" checked />
-              <span>Alias aus OCR-Zeile übernehmen</span>
-            </label>
-          {% endif %}
-          <button type="submit">Speichern</button>
-          <a class="viewer-link" href="{{ url_for('upload_overview') }}">Zurück zur Übersicht</a>
-          <a class="viewer-link" href="{{ url_for('review_next', current=file_id) }}">Weiter (nächste Unvollständige)</a>
-          {% if review_total %}
-            <span class="viewer-badge">Review {{ review_index or 1 }}/{{ review_total }}</span>
-          {% endif %}
-          {% with messages = get_flashed_messages() %}
-            {% if messages %}
-              <span class="viewer-message">{{ messages[0] }}</span>
-              {% if 'Lieferant gespeichert.' in messages %}
-                <script>
-                  window.addEventListener("DOMContentLoaded", () => {
-                    const input = document.querySelector(".viewer-input");
-                    const supplierName = input && input.value ? input.value.trim() : "Unbekannt";
-                    document.title = `Docaro | ${supplierName} | {{ filename }}`;
-                  });
-                </script>
+
+          <div class="viewer-card">
+            <div class="viewer-card-title">Lieferant</div>
+            <div class="viewer-field">
+              <input
+                class="viewer-input"
+                type="text"
+                name="supplier_input"
+                placeholder="Lieferant eingeben"
+                value="{{ supplier if supplier and supplier != 'Unbekannt' else '' }}"
+              />
+              {% if supplier_guess_line %}
+                <label class="viewer-checkbox">
+                  <input type="checkbox" name="alias_from_ocr" value="1" checked />
+                  <span>Alias aus OCR-Zeile übernehmen</span>
+                </label>
               {% endif %}
-            {% endif %}
-          {% endwith %}
-        </form>
-        <form action="{{ url_for('confirm_date_from_view') }}" method="post" class="viewer-form viewer-date-form">
-          <span class="viewer-label">Datum festlegen</span>
-          <input
-            class="viewer-input viewer-date-input"
-            type="text"
-            name="date_input"
-            placeholder="TT.MM.JJJJ, TT.MM.JJ oder YYYY-MM-DD"
-            value="{{ date_value or '' }}"
-          />
-          <select class="viewer-select" name="date_fmt">
-            <option value="%Y-%m-%d" {% if date_fmt == "%Y-%m-%d" %}selected{% endif %}>ISO (YYYY-MM-DD)</option>
-            <option value="%d.%m.%Y" {% if date_fmt == "%d.%m.%Y" %}selected{% endif %}>Deutsch (DD.MM.YYYY)</option>
-            <option value="%d-%m-%Y" {% if date_fmt == "%d-%m-%Y" %}selected{% endif %}>Deutsch mit Bindestrich (DD-MM-YYYY)</option>
-          </select>
-          <input type="hidden" name="file_id" value="{{ file_id }}" />
-          <button type="submit">Datum speichern</button>
-          {% if date_error %}
-            <span class="viewer-error">{{ date_error }}</span>
-          {% endif %}
+            </div>
+          </div>
+
+          <div class="viewer-card">
+            <div class="viewer-card-title">Datum</div>
+            <div class="viewer-field">
+              <input
+                class="viewer-input"
+                type="text"
+                name="date_input"
+                placeholder="TT.MM.JJJJ oder YYYY-MM-DD"
+                value="{{ date_value or '' }}"
+              />
+              <select class="viewer-select" name="date_fmt">
+                <option value="%Y-%m-%d" {% if date_fmt == "%Y-%m-%d" %}selected{% endif %}>ISO</option>
+                <option value="%d.%m.%Y" {% if date_fmt == "%d.%m.%Y" %}selected{% endif %}>DD.MM.YYYY</option>
+                <option value="%d-%m-%Y" {% if date_fmt == "%d-%m-%Y" %}selected{% endif %}>DD-MM-YYYY</option>
+              </select>
+              {% if date_error %}
+                <div class="viewer-error">{{ date_error }}</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="viewer-card">
+            <div class="viewer-card-title">Lieferscheinnr.</div>
+            <div class="viewer-field">
+              <input
+                class="viewer-input"
+                type="text"
+                name="doc_number_input"
+                placeholder="Nummer eingeben"
+                value="{{ doc_number or '' }}"
+              />
+            </div>
+          </div>
+
+          <div class="viewer-card">
+            <div class="viewer-card-title">Dokumenttyp</div>
+            <div class="viewer-field">
+              <select name="doc_type" class="viewer-select">
+                <option value="RECHNUNG" {% if doc_type == 'RECHNUNG' %}selected{% endif %}>Rechnung</option>
+                <option value="LIEFERSCHEIN" {% if doc_type == 'LIEFERSCHEIN' %}selected{% endif %}>Lieferschein</option>
+                <option value="ÜBERNAHMESCHEIN" {% if doc_type == 'ÜBERNAHMESCHEIN' %}selected{% endif %}>Übernahmeschein</option>
+                <option value="KOMMISSIONIERLISTE" {% if doc_type == 'KOMMISSIONIERLISTE' %}selected{% endif %}>Kommissionierliste</option>
+                <option value="SONSTIGES" {% if doc_type == 'SONSTIGES' or not doc_type %}selected{% endif %}>Sonstiges</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="viewer-controls-actions">
+            <button type="submit" class="viewer-primary">Speichern</button>
+          </div>
         </form>
       </div>
       {% if pdf_missing %}

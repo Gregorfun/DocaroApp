@@ -1,68 +1,68 @@
-# Docaro - Moderne Dokumenten-Pipeline 🚀
+# Docaro - Dokumenten-OCR & Extraktion
 
-**Intelligentes Tool für automatisierte PDF-Verarbeitung mit KI-Unterstützung**
+Docaro ist eine Flask-Web-App (Gunicorn) mit RQ-Worker (Redis), die PDF-Dokumente verarbeitet: Text-Layer nutzen, OCR-Fallback (Tesseract), Extraktion (Lieferant/Datum/Dokumenttyp/Dokumentnummer) und Review/Quarantäne.
 
-Docaro verarbeitet Lieferscheine, Rechnungen und andere Dokumente vollautomatisch: OCR, Layout-Analyse, ML-basierte Extraktion von Lieferant, Datum und Dokumenttyp.
+## 🐧 Linux/VPS Deployment
+
+Für einen produktiven Linux-Server (Installation nach `git pull`, systemd-Services, Nginx/Reverse-Proxy, System-Abhängigkeiten, Daten-Migration) siehe:
+
+- [DEPLOYMENT_LINUX.md](DEPLOYMENT_LINUX.md)
+- [DEPENDENCIES.md](DEPENDENCIES.md)
+
+Wenn das ursprüngliche Git-Remote nicht mehr existiert:
+
+- [NEW_GITHUB_REPO_SETUP.md](NEW_GITHUB_REPO_SETUP.md)
 
 ---
 
 ## 🎯 Features
 
-### ✅ **Robuste OCR-Pipeline**
-- Multi-Layer OCR: OCRmyPDF → PaddleOCR → EasyOCR
-- Automatische Qualitätserkennung
-- Optimiert für deutsche Dokumente
+### ✅ **Robuste Verarbeitung**
+- Text-Layer zuerst, OCR-Fallback via Tesseract
+- PDF → Images via `pdf2image` (Poppler: `pdfinfo`/`pdftoppm`)
+- Timeouts + Quarantäne/Review bei Fehlern
 
-### 🤖 **ML-basierte Extraktion**
-- Lieferanten-Klassifikation (Fuzzy-Matching + ML)
-- Datums-Extraktion (Hybrid: Regex + ML)
-- Dokumenttyp-Erkennung (Rechnung, Lieferschein, etc.)
+### 🧾 **Extraktion & Review**
+- Lieferant/Datum/Dokumenttyp/Dokumentnummer inkl. Confidence
+- Review-Queue zum manuellen Korrigieren und Finalisieren
 
-### 📊 **Docling-Integration**
-- Strukturierte Layout-Analyse
-- Automatische Tabellen-Extraktion
-- Header/Footer/Section-Detection
+### 🧩 **Optional: Extras/ML**
+- Zusätzliche Stacks sind bewusst getrennt (siehe `requirements-*.txt`), damit Server-Updates stabil bleiben.
 
-### 🔍 **Semantische Suche**
-- Vektordatenbank (Qdrant/Chroma)
-- "Finde ähnliche Dokumente"
-- Duplikaterkennung
-
-### 🔄 **Continual Learning**
-- Label Studio für manuelles Labeling
-- MLflow für Experiment-Tracking
-- Automatisches Re-Training mit neuen Daten
+Typische Files:
+- Runtime (minimal): `requirements.txt`
+- ML light: `requirements-ml.txt`
+- Docling: `requirements-docling.txt`
+- PaddleOCR: `requirements-paddleocr.txt`
+- Große Komplett-Stacks: `requirements-ml-full.txt`, `requirements-pipeline.txt`
 
 ---
 
 ## 📦 Quick Start
 
-### Installation
+### Linux (lokal/dev)
 
-```powershell
-# Virtual Environment aktivieren
-.\.venv\Scripts\Activate.ps1
-
-# Dependencies installieren
-pip install -r requirements.txt
-pip install -r requirements-pipeline.txt
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python app/app.py
 ```
 
-### Start
+→ Öffne http://127.0.0.1:5001
+
+Für Produktion unter systemd: [DEPLOYMENT_LINUX.md](DEPLOYMENT_LINUX.md)
+
+### Windows
 
 ```powershell
-# Anwendung Starten (Hintergrund-Prozess)
-.\start_app.ps1
-
-# Anwendung Stoppen
-.\stop_app.ps1
+\.\start_app.ps1
+\.\stop_app.ps1
 ```
 
-### Basis-Setup (Windows)
-
-- **Python**: 3.9+
-- **Tesseract OCR**: [Download](https://github.com/UB-Mannheim/tesseract/wiki)
-- **Poppler**: Bereits in `poppler/` vorhanden
+Basis-Setup (Windows):
+- Python: 3.9+
+- Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki
+- Poppler: falls nicht im System installiert, nutze ein lokales Poppler-Bundle
 
 ### Docker-Services (Optional)
 
@@ -107,7 +107,9 @@ D:/Docaro/.venv/Scripts/python.exe -m scripts.seed_user --email g.machuletz@brac
 
 ## ♻️ Stateless Mode (Runtime-Reset)
 
-Beim Start werden alle Dashboard-/Dokument-Runtime-Daten gelöscht, damit nach einem Neustart keine alten Dokumente erscheinen.
+Optional und **potenziell destruktiv**: Wenn `DOCARO_STATELESS=1` gesetzt ist, wird beim Start des Web-Services (nicht beim Worker) ein Best-Effort-Reset des Runtime-States ausgeführt, damit nach einem Neustart keine alten Dokumente im Dashboard hängen bleiben.
+
+Empfehlung: In Produktion nur aktivieren, wenn du wirklich „sauberen Neustart“ willst.
 
 Gelöscht/geleert (best-effort):
 

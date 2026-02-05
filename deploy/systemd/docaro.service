@@ -1,0 +1,27 @@
+[Unit]
+Description=Docaro Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=docaro
+Group=docaro
+WorkingDirectory=/opt/docaro
+EnvironmentFile=/etc/docaro/docaro.env
+
+# Preflight: check system + python deps
+ExecStartPre=/opt/docaro/.venv/bin/python /opt/docaro/tools/prestart_check.py
+
+ExecStart=/opt/docaro/.venv/bin/gunicorn \
+  --workers 2 \
+  --threads 4 \
+  --bind 127.0.0.1:5001 \
+  --access-logfile - \
+  --error-logfile - \
+  app.app:app
+
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

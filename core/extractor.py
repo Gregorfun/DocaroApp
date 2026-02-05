@@ -85,6 +85,18 @@ LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 DEBUG_EXTRACT = config.DEBUG_EXTRACT
 USE_PADDLEOCR = getattr(config, "USE_PADDLEOCR", False)
 PADDLEOCR_LANG = getattr(config, "PADDLEOCR_LANG", "german")
+
+def _render_dpi() -> int:
+    """DPI for PDF->image rendering.
+
+    Lower DPI reduces memory usage and avoids OOM-kills on small servers.
+    Can be overridden via DOCARO_RENDER_DPI.
+    """
+    try:
+        dpi = int(os.getenv("DOCARO_RENDER_DPI", "200"))
+    except ValueError:
+        dpi = 200
+    return max(120, min(dpi, 300))
 DEBUG_LOG_PATH = config.LOG_DIR / "extract_debug.log"
 _LOGGER = logging.getLogger(__name__)
 _LOG_LOCK = threading.Lock()
@@ -411,6 +423,7 @@ ORDER_KEYWORDS = [
 ]
 
 _DOCNO_TOKEN = re.compile(r"\b([A-Z0-9][A-Z0-9\-/]{2,})\b", re.IGNORECASE)
+_LIEFERSCHEIN_TITLE_NO = re.compile(r"\blieferschein\b[^0-9\n]{0,12}(\d{7,10})\b", re.IGNORECASE)
 _DATE_LIKE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b")
 _IBAN_LIKE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _PHONE_LIKE = re.compile(r"\b\+?\d[\d /()\-]{6,}\d\b")
@@ -483,6 +496,15 @@ def extract_document_numbers(text: str) -> Dict[str, object]:
     """
 
     combined = text or ""
+
+    # Spezielles Muster: "Lieferschein 200541642" (ohne "-Nr" Label)
+    # (häufig bei Hersteller-Lieferscheinen wie Liebherr)
+    m = _LIEFERSCHEIN_TITLE_NO.search(combined)
+    if m:
+        cand = _clean_doc_number(m.group(1))
+        if _is_plausible_doc_number(cand, allow_5digit_numeric=False):
+            return {"delivery_note_no": cand, "order_no": None, "confidence": "high"}
+
     delivery = _find_number_near_keywords(combined, DELIVERY_NOTE_KEYWORDS)
     if delivery:
         return {"delivery_note_no": delivery, "order_no": None, "confidence": "high"}
@@ -676,18 +698,20 @@ def _render_pdf_images(
 
     try:
         try:
+            dpi = _render_dpi()
             images = convert_from_path(
                 str(pdf_path),
-                dpi=300,
+                dpi=dpi,
                 first_page=1,
                 last_page=pages,
                 poppler_path=str(poppler_bin) if poppler_bin else None,
                 timeout=PDF_CONVERT_TIMEOUT,
             )
         except TypeError:
+            dpi = _render_dpi()
             images = convert_from_path(
                 str(pdf_path),
-                dpi=300,
+                dpi=dpi,
                 first_page=1,
                 last_page=pages,
                 poppler_path=str(poppler_bin) if poppler_bin else None,
@@ -727,7 +751,8 @@ def _render_pdf_images_pymupdf(pdf_path: Path, pages: int = 1) -> Tuple[List[obj
 
     images: List[object] = []
     try:
-        scale = 300.0 / 72.0
+        dpi = float(_render_dpi())
+        scale = dpi / 72.0
         matrix = fitz.Matrix(scale, scale)
         max_page = min(pages, doc.page_count)
         for page_index in range(max_page):
@@ -1887,10 +1912,10 @@ def detect_supplier_detailed(
             float(top.get("confidence") or 0.0),
             str(top.get("source") or "none"),
             str(top.get("matched") or ""),
-            candidates[:3],
+            candidates[:8],
         )
 
-    return "Unbekannt", 0.0, "none", "", candidates[:3]
+    return "Unbekannt", 0.0, "none", "", candidates[:8]
 
 
 def _ocr_date_crop(image, crop_box: Tuple[int, int, int, int]) -> str:
@@ -2315,7 +2340,9 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     # Supplier + DocType Coupling / Cross-check
     try:
-        # 0) ÜBERNAHMESCHEIN: Rollenbasierte KSR-Erkennung (Beförderer/Abfallentsorger)
+        # 0) Rollenbasierte KSR-Erkennung (Beförderer/Abfallentsorger)
+        # Nicht nur für ÜBERNAHMESCHEIN: manche Belege (auch Lieferschein-ähnlich)
+        # enthalten eine Spalte "Beförderer" mit "KS- Logistic ...".
         def _extract_role_block(text: str, marker: str, max_lines: int = 20) -> str:
             lines = [ln.rstrip() for ln in (text or "").splitlines()]
             if not lines:
@@ -2336,34 +2363,38 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
             return ""
 
         role_candidates: List[Dict[str, object]] = []
-        if doc_type == "ÜBERNAHMESCHEIN":
-            role_texts = [
-                _extract_role_block(combined_text, "Beförderer (Name, Anschrift)"),
-                _extract_role_block(combined_text, "Befoerderer (Name, Anschrift)"),
-                _extract_role_block(combined_text, "Abfallentsorger (Name, Anschrift)"),
-                _extract_role_block(combined_text, "Abfallentsorger"),
-            ]
-            role_joined = "\n".join([t for t in role_texts if t])
-            role_norm = _normalize_supplier_text(role_joined)
-            if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE):
-                role_candidates.append(
-                    {
-                        "canonical": "KSR",
-                        "confidence": 0.99,
-                        "source": "role_block",
-                        "matched": "Beförderer/Abfallentsorger",
-                        "segment": "role",
-                    }
-                )
+        role_texts = [
+            _extract_role_block(combined_text, "Beförderer (Name, Anschrift)"),
+            _extract_role_block(combined_text, "Befoerderer (Name, Anschrift)"),
+            _extract_role_block(combined_text, "Beförderer"),
+            _extract_role_block(combined_text, "Befoerderer"),
+            _extract_role_block(combined_text, "Abfallentsorger (Name, Anschrift)"),
+            _extract_role_block(combined_text, "Abfallentsorger"),
+        ]
+        role_joined = "\n".join([t for t in role_texts if t])
+        role_norm = _normalize_supplier_text(role_joined)
+        if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(
+            r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE
+        ):
+            role_candidates.append(
+                {
+                    "canonical": "KSR",
+                    "confidence": 0.99,
+                    "source": "role_block",
+                    "matched": "Beförderer/Abfallentsorger",
+                    "segment": "role",
+                }
+            )
 
         if role_candidates:
-            # KSR hart priorisieren
             best_role = sorted(role_candidates, key=lambda x: float(x.get("confidence") or 0.0), reverse=True)[0]
-            supplier_canonical = str(best_role.get("canonical") or supplier_canonical)
-            supplier_source = str(best_role.get("source") or supplier_source)
-            supplier_confidence = max(float(best_role.get("confidence") or 0.0), float(supplier_confidence or 0.0))
-            # Kandidatenliste um role candidate erweitern (für Debug)
-            supplier_candidates = [best_role] + [c for c in (supplier_candidates or []) if c != best_role]
+            current = (supplier_canonical or "").strip()
+            # Override nur wenn sinnvoll: falscher Kunde erkannt oder niedrigere Confidence
+            if current.lower() in ("franz bracht", "unbekannt") or float(supplier_confidence or 0.0) < 0.90:
+                supplier_canonical = str(best_role.get("canonical") or supplier_canonical)
+                supplier_source = str(best_role.get("source") or supplier_source)
+                supplier_confidence = max(float(best_role.get("confidence") or 0.0), float(supplier_confidence or 0.0))
+                supplier_candidates = [best_role] + [c for c in (supplier_candidates or []) if c != best_role]
 
         # 1) Franz Bracht aus Recipient-Kontext verwerfen
         if supplier_candidates:
@@ -2387,6 +2418,59 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                         supplier_canonical = "Unbekannt"
                         supplier_source = "recipient_blocked"
                         supplier_confidence = 0.0
+
+        # 1b) Franz Bracht als Kunde/Warenempfänger erkennen und als Supplier verwerfen
+        # Hintergrund: Viele Belege enthalten "Kunde: Franz Bracht" (Empfänger), der eigentliche Lieferant ist jemand anders.
+        if supplier_candidates:
+            current = (supplier_canonical or "").strip()
+            if current.lower() == "franz bracht":
+                norm = _normalize_supplier_text(combined_text)
+                customer_markers = [
+                    "kunde",
+                    "warenempfaenger",
+                    "empfaenger",
+                    "lieferadresse",
+                    "rechnungsadresse",
+                    "rechnungsempfaenger",
+                    "ship to",
+                    "sold to",
+                    "bill to",
+                ]
+                is_customer_context = any(
+                    re.search(rf"\b{re.escape(m)}\b.*\bfranz\b.*\bbracht\b", norm)
+                    for m in customer_markers
+                )
+                if is_customer_context:
+                    # Bevorzuge KSR falls vorhanden (typisch bei Entsorgung/Abfall-Belegen)
+                    ksr = next(
+                        (
+                            c
+                            for c in supplier_candidates
+                            if str(c.get("canonical") or "").strip().upper() == "KSR"
+                        ),
+                        None,
+                    )
+                    if ksr:
+                        supplier_canonical = "KSR"
+                        supplier_source = str(ksr.get("source") or "customer_blocked")
+                        supplier_confidence = max(supplier_confidence or 0.0, float(ksr.get("confidence") or 0.0))
+                    else:
+                        # Sonst: bestes alternatives Matching, aber nicht aus recipient wenn möglich
+                        alts = [
+                            c
+                            for c in supplier_candidates
+                            if str(c.get("canonical") or "").strip() and str(c.get("canonical") or "").lower() != "franz bracht"
+                        ]
+                        alts.sort(key=lambda x: float(x.get("confidence") or 0.0), reverse=True)
+                        alt = next((c for c in alts if str(c.get("segment") or "") != "recipient"), None) or (alts[0] if alts else None)
+                        if alt:
+                            supplier_canonical = str(alt.get("canonical"))
+                            supplier_source = str(alt.get("source") or "customer_blocked")
+                            supplier_confidence = float(alt.get("confidence") or supplier_confidence)
+                        else:
+                            supplier_canonical = "Unbekannt"
+                            supplier_source = "customer_blocked"
+                            supplier_confidence = 0.0
 
         # 2) ÜBERNAHMESCHEIN: KSR boost (Fallback wenn role_block nichts ergab)
         if doc_type == "ÜBERNAHMESCHEIN":
@@ -2616,27 +2700,61 @@ def process_folder(
         )
         return result
 
-    pdf_files = sorted(input_dir.glob("*.pdf"))
+    pdf_files = sorted(
+        p
+        for p in input_dir.iterdir()
+        if p.is_file() and p.suffix.lower() == ".pdf"
+    )
     total = len(pdf_files)
     # Reduziere Parallelität auf 1 Worker für stabilere Performance
     max_workers = 1
 
     done = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    timeout_seconds = int(os.getenv("DOCARO_FOLDER_TIMEOUT", "1800"))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="docaro-pdf") as executor:
         future_to_pdf = {executor.submit(_process_one, p): p for p in pdf_files}
-        for future in concurrent.futures.as_completed(future_to_pdf):
-            pdf_path = future_to_pdf[future]
-            try:
-                results.append(future.result())
-                done += 1
-                if progress_callback is not None:
-                    try:
-                        progress_callback(done, total, pdf_path.name)
-                    except Exception:
-                        pass
-            except Exception as exc:
-                _LOGGER.error(f"Error processing {pdf_path}: {exc}")
+        try:
+            for future in concurrent.futures.as_completed(future_to_pdf, timeout=timeout_seconds):
+                pdf_path = future_to_pdf[future]
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    _LOGGER.error(f"Error processing {pdf_path}: {exc}")
+                    results.append(
+                        {
+                            "original": pdf_path.name,
+                            "out_name": pdf_path.name,
+                            "supplier": "",
+                            "date": "",
+                            "status": "error",
+                            "error": f"processing_failed: {exc}",
+                            "parsing_failed": True,
+                        }
+                    )
+                finally:
+                    done += 1
+                    if progress_callback is not None:
+                        try:
+                            progress_callback(done, total, pdf_path.name)
+                        except Exception:
+                            pass
+        except concurrent.futures.TimeoutError:
+            # Mark remaining PDFs as failed so the job completes and the UI shows all entries.
+            pending = [p for f, p in future_to_pdf.items() if not f.done()]
+            for pdf_path in pending:
+                results.append(
+                    {
+                        "original": pdf_path.name,
+                        "out_name": pdf_path.name,
+                        "supplier": "",
+                        "date": "",
+                        "status": "error",
+                        "error": f"folder_timeout>{timeout_seconds}s",
+                        "parsing_failed": True,
+                    }
+                )
                 done += 1
                 if progress_callback is not None:
                     try:

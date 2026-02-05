@@ -160,6 +160,23 @@ class TestDocNumberExtraction(unittest.TestCase):
         self.assertEqual(result.doc_number, "08625112402")
         self.assertEqual(result.confidence, "high")
         self.assertEqual(result.source_field, "Arbeitsauftrag")
+
+    def test_ksr_auftragsnummer_auf_prefix(self):
+        """Test: KSR nutzt oft AUF... als relevante Nummer (Auftragsnummer)."""
+        text = """
+        KSR Logistic GmbH
+        Lieferschein
+
+        Auftragsnummer: AUF12345678
+        Kunde: Franz Bracht
+        Abfall / Entsorgung
+        """
+        result = self.extractor.extract_doc_number(text, "KSR", "Lieferschein")
+
+        self.assertIsNotNone(result.doc_number)
+        self.assertEqual(result.doc_number, "AUF12345678")
+        self.assertIn(result.confidence, ["high", "medium"])
+        self.assertIn("Auftrag", result.source_field or "")
     
     def test_fallback_ohne_nummer(self):
         """Test: Fallback ohneNr+Hash wenn keine Nummer gefunden."""

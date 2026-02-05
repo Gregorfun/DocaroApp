@@ -1,0 +1,9 @@
+{
+  "gate_supplier_min": 0.8,
+  "gate_date_min": 0.8,
+  "gate_doc_type_min": 0.7,
+  "gate_doc_number_min": 0.8,
+  "auto_finalize_enabled": false,
+  "autosort_enabled": false,
+  "autosort_base_dir": "/opt/docaro/data/fertig"
+}

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Upload Progress Demo</title>
+  <style>
+    :root {
+      --bg: #f2f1ed;
+      --panel: #ffffff;
+      --text: #2c2f2f;
+      --muted: #6b6f6f;
+      --accent: #1b6d6f;
+      --border: #d9d6cf;
+    }
+    
+    body {
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f2f1ed 0%, #e7e4dd 100%);
+      color: var(--text);
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 20px;
+    }
+    
+    h1 {
+      margin: 0 0 24px;
+      font-size: 2rem;
+    }
+    
+    .notice {
+      margin-top: 10px;
+      color: #1f5f35;
+      font-weight: 600;
+    }
+    
+    .processing-notice {
+      background: linear-gradient(135deg, #e8f5f5 0%, #f0f9f9 100%);
+      border-radius: 8px;
+      padding: 16px;
+      border: 2px solid #b8e6e6;
+    }
+    
+    /* Progress Display Styles */
+    .progress-display {
+      margin: 16px 0;
+      padding: 24px;
+      background: linear-gradient(135deg, #e8f5f5 0%, #f0f9f9 100%);
+      border-radius: 12px;
+      border: 2px solid #b8e6e6;
+      box-shadow: 0 4px 12px rgba(27, 109, 111, 0.1);
+    }
+
+    .progress-animation {
+      font-size: 1.8rem;
+      text-align: center;
+      margin-bottom: 16px;
+      letter-spacing: 4px;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .progress-animation.pulse {
+      animation: pulse 0.5s ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.15); }
+    }
+
+    .progress-message {
+      font-size: 1rem;
+      text-align: center;
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 16px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1.4;
+      padding: 0 16px;
+    }
+
+    .progress-message.fade-in {
+      animation: fadeIn 0.5s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+      0% { opacity: 0; transform: translateY(-10px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    .progress-bar-container {
+      text-align: center;
+      margin-top: 16px;
+    }
+
+    .progress-bar-container progress {
+      width: 100%;
+      max-width: 400px;
+      height: 20px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: none;
+      background: rgba(255, 255, 255, 0.5);
+    }
+
+    .progress-bar-container progress::-webkit-progress-bar {
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 10px;
+    }
+
+    .progress-bar-container progress::-webkit-progress-value {
+      background: linear-gradient(90deg, #1b6d6f 0%, #2a9b9e 100%);
+      border-radius: 10px;
+      transition: width 0.3s ease;
+    }
+
+    .progress-bar-container progress::-moz-progress-bar {
+      background: linear-gradient(90deg, #1b6d6f 0%, #2a9b9e 100%);
+      border-radius: 10px;
+    }
+
+    .progress-text {
+      display: block;
+      margin-top: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    
+    button:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <h1>📄 Docaro Upload Progress Demo</h1>
+  
+  <p>Diese Demo zeigt die neue Upload-Wartezeit-Anzeige mit:</p>
+  <ul>
+    <li>🎭 Lustigen OCR-Fakten</li>
+    <li>💪 Motivierenden Sprüchen</li>
+    <li>😄 Loading-Witzen</li>
+    <li>📊 Echten Statistiken</li>
+    <li>✨ Animierten Emojis</li>
+  </ul>
+  
+  <div class="notice processing-notice" id="demo-container">
+    <strong>🔄 Verarbeitung läuft …</strong>
+    <div id="progress-enhanced"></div>
+    <p style="margin-top: 8px; font-size: 0.9rem; color: var(--muted);">
+      Diese Demo läuft endlos. In der echten Anwendung wird die Seite automatisch aktualisiert.
+    </p>
+  </div>
+  
+  <button onclick="location.reload()">🔄 Demo neu starten</button>
+  
+  <script>
+    // Lade Upload Messages Script dynamisch
+    const script = document.createElement('script');
+    script.src = '/static/upload-messages.js';
+    script.onload = function() {
+      // Simuliere Progress-Daten
+      window.docaroProgress = {
+        done: 3,
+        total: 10
+      };
+      
+      // Starte Display
+      const display = new ProgressDisplay('progress-enhanced');
+      display.start();
+      display.updateProgress(3, 10);
+      
+      // Simuliere fortschreitenden Progress
+      let done = 3;
+      setInterval(() => {
+        done++;
+        if (done > 10) done = 1;
+        display.updateProgress(done, 10);
+      }, 3000);
+    };
+    document.head.appendChild(script);
+  </script>
+</body>
+</html>

@@ -24,17 +24,22 @@
           <p class="notice">Downloads wurden zurückgesetzt.</p>
         {% endif %}
         {% if processing %}
-          <p class="notice">
-            Verarbeitung läuft …
-            {% if progress and progress["total"] %}
-              <progress value="{{ progress["done"] }}" max="{{ progress["total"] }}"></progress>
-              ({{ progress["done"] }}/{{ progress["total"] }})
-            {% else %}
-              <progress></progress>
-            {% endif %}
-            Seite aktualisiert sich automatisch.
-          </p>
+          <div class="notice processing-notice">
+            <strong>🔄 Verarbeitung läuft …</strong>
+            <div id="progress-enhanced"></div>
+            <p style="margin-top: 8px; font-size: 0.9rem; color: var(--muted);">
+              Seite aktualisiert sich automatisch.
+            </p>
+          </div>
+          <script>
+            window.docaroProgress = {
+              done: {{ progress.get('done', 0) if progress else 0 }},
+              total: {{ progress.get('total', 0) if progress else 0 }},
+              current_file: {{ (progress.get('current_file', '') if progress else '')|tojson }}
+            };
+          </script>
           <meta http-equiv="refresh" content="3">
+          <script src="{{ url_for('static', filename='upload-messages.js') }}"></script>
         {% endif %}
         {% with messages = get_flashed_messages() %}
           {% if messages %}
@@ -134,6 +139,7 @@
                           <label class="field-label">Lieferant eingeben</label>
                           <input class="action-input" type="text" name="supplier_input" placeholder="Lieferant eingeben" value="{{ item.supplier if item.supplier and item.supplier != 'Unbekannt' and not is_gibberish else '' }}" />
                           <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />
+                          <input type="hidden" name="date_fmt" value="%d-%m-%Y" />
                           <input type="hidden" name="supplier_guess_line" value="{{ item.supplier_guess_line or '' }}" />
                           {% if item.supplier_guess_line and not is_gibberish %}
                             <label class="checkbox">
@@ -186,6 +192,7 @@
                           <label class="field-label">Dokumentnummer</label>
                           <input class="action-input" type="text" name="doc_number_input" placeholder="z.B. Lieferschein-/Rechnungsnummer" value="{{ item.doc_number or '' }}" />
                           <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />
+                          <input type="hidden" name="date_fmt" value="%d-%m-%Y" />
                           <div class="action-actions">
                             <button type="submit" class="action-button">Nummer speichern</button>
                           </div>
@@ -237,6 +244,9 @@
                         <span class="status-pill status-{{ row_state }}">
                           {% if row_state == "unvollstaendig" %}unvollständig{% elif row_state == "in_bearbeitung" %}in Bearbeitung{% else %}fertig{% endif %}
                         </span>
+                        {% if item.parsing_failed %}
+                          <span class="status-pill status-fehler">OCR fehlgeschlagen</span>
+                        {% endif %}
                       </span>
                     </div>
                     <div class="result-action-field">
@@ -362,7 +372,8 @@
         };
         const applyDateFormatting = () => {
           const fmt = getPreferredDateFmt();
-          document.querySelectorAll('td[data-field="date"]').forEach((cell) => {
+          // Date field is rendered as spans/divs (cards), not <td>
+          document.querySelectorAll('[data-field="date"]').forEach((cell) => {
             const iso = (cell.dataset.isoDate || "").trim();
             if (!iso) return;
             cell.textContent = formatDate(iso, fmt) || "-";
@@ -374,6 +385,17 @@
             const normalizedIso = `${p.y}-${pad2(p.mo)}-${pad2(p.d)}`;
             input.dataset.isoDate = normalizedIso;
             input.value = formatDate(normalizedIso, fmt);
+          });
+
+          // Keep all date-format selectors and hidden fields aligned with the preferred fmt.
+          document.querySelectorAll('select[name="date_fmt"]').forEach((sel) => {
+            const allowed = Array.from(sel.options || []).map((o) => o.value);
+            if (allowed.includes(fmt)) {
+              sel.value = fmt;
+            }
+          });
+          document.querySelectorAll('input[type="hidden"][name="date_fmt"]').forEach((input) => {
+            input.value = fmt;
           });
         };
 

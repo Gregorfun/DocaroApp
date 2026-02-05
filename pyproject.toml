@@ -9,10 +9,17 @@ description = "Modern Document Pipeline"
 authors = [{name = "Gregorfun", email = "gregor@example.com"}]
 dependencies = [
     "flask",
+    "gunicorn",
+    "argon2-cffi",
+    "rq",
+    "redis",
     "pdf2image",
     "pytesseract",
+    "pillow",
     "python-dateutil",
-    "pyyaml"
+    "PyPDF2",
+    "pdfplumber",
+    "PyYAML"
 ]
 requires-python = ">=3.9"
 
