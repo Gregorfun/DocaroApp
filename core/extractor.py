@@ -85,6 +85,31 @@ LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 DEBUG_EXTRACT = config.DEBUG_EXTRACT
 USE_PADDLEOCR = getattr(config, "USE_PADDLEOCR", False)
 PADDLEOCR_LANG = getattr(config, "PADDLEOCR_LANG", "german")
+PADDLEOCR_FALLBACK_THRESHOLD = float(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle für Fallback
+PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
+PADDLEOCR_INSTANCE = None  # Lazy-init
+
+def _get_paddleocr_instance():
+    """Singleton für PaddleOCR-Instanz (lazy-init)."""
+    global PADDLEOCR_INSTANCE
+    if not USE_PADDLEOCR or PADDLEOCR_INSTANCE is not None:
+        return PADDLEOCR_INSTANCE
+    try:
+        import os as _os
+        # Disable GPU bei Speichermangel
+        _os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+        from paddleocr import PaddleOCR
+        PADDLEOCR_INSTANCE = PaddleOCR(
+            use_angle_cls=True,
+            lang=['german'],
+            use_gpu=False,  # CPU nur (GPU kann zu viel RAM brauchen)
+            show_log=False
+        )
+        _LOGGER.info("PaddleOCR initialized successfully")
+    except Exception as e:
+        _LOGGER.warning(f"Failed to initialize PaddleOCR: {e}")
+        PADDLEOCR_INSTANCE = False  # Mark as failed
+    return PADDLEOCR_INSTANCE if PADDLEOCR_INSTANCE else None
 
 def _render_dpi() -> int:
     """DPI for PDF->image rendering.
@@ -335,6 +360,8 @@ if not _POPPLER_OK:
 SUPPLIER_KEYWORDS = {
     "Liebherr-Werk Ehingen": "Liebherr_Ehingen",
     "Liebherr-Werk Nenzing": "Liebherr_Nenzing",
+    "KS-Logistic": "KSR",
+    "KS Logistic": "KSR",
     "DB Schenker": "DBSchenker",
     "DHL Paket": "DHL",
     "Linde Material Handling": "Linde",
@@ -355,6 +382,7 @@ SUPPLIER_KEYWORDS = {
     "PV Automotive": "PV Automotive",
     "Foerch": "Foerch",
     "Liebherr": "Liebherr",
+    "KSR": "KSR",
 }
 
 VERGOELST_ALIASES = [
@@ -610,7 +638,7 @@ def _has_osd_traineddata() -> bool:
     return any(candidate.exists() for candidate in candidates)
 
 
-def _ocr_image(image, rotation: int, config: str = "", timeout: Optional[int] = None) -> str:
+def _ocr_image(image, rotation: int, config: str = "", timeout: Optional[int] = None, use_paddle: bool = False) -> str:
     if rotation:
         image = image.rotate(rotation, expand=True)
 
@@ -619,12 +647,45 @@ def _ocr_image(image, rotation: int, config: str = "", timeout: Optional[int] = 
     image = enhancer.enhance(1.5)
 
     effective_timeout = OCR_TIMEOUT_SECONDS if timeout is None else timeout
-    return pytesseract.image_to_string(
-        image,
-        lang="deu",
-        config=config,
-        timeout=effective_timeout,
-    )
+    
+    # Versuche Tesseract (primär)
+    try:
+        return pytesseract.image_to_string(
+            image,
+            lang="deu",
+            config=config,
+            timeout=effective_timeout,
+        )
+    except (pytesseract.TesseractError, TimeoutError) as e:
+        if use_paddle:
+            # Fallback zu PaddleOCR wenn explizit gewünscht
+            return _ocr_image_paddle(image, timeout=effective_timeout)
+        raise
+
+def _ocr_image_paddle(image, timeout: Optional[int] = None) -> str:
+    """OCR mit PaddleOCR (Fallback)."""
+    if not USE_PADDLEOCR:
+        return ""
+    
+    try:
+        paddle_ocr = _get_paddleocr_instance()
+        if not paddle_ocr:
+            return ""
+        
+        # PaddleOCR braucht RGB für manche Modelle
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        result = paddle_ocr.ocr(image, cls=True)
+        if not result or not result[0]:
+            return ""
+        
+        # PaddleOCR gibt Liste von [[bbox], text, confidence] zurück
+        text_lines = [line[1] for line in result[0] if len(line) > 1]
+        return '\n'.join(text_lines)
+    except Exception as e:
+        _LOGGER.debug(f"PaddleOCR failed: {e}")
+        return ""
 
 
 def _count_keywords(text: str) -> int:
@@ -885,13 +946,26 @@ def _detect_osd_rotation(image) -> Optional[int]:
 
 
 def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
-    def _safe_ocr(rotation: int) -> Tuple[str, str, int]:
+    def _safe_ocr(rotation: int, use_paddle_fallback: bool = False) -> Tuple[str, str, int]:
         try:
-            text_value = _ocr_image(image, rotation=rotation)
+            text_value = _ocr_image(image, rotation=rotation, use_paddle=use_paddle_fallback)
         except (pytesseract.TesseractError, TimeoutError) as exc:
             message = str(exc)
             if "timeout" in message.lower():
+                # Bei Timeout versuche PaddleOCR
+                if USE_PADDLEOCR and not use_paddle_fallback:
+                    _LOGGER.info("Tesseract timeout, trying PaddleOCR fallback")
+                    return _safe_ocr(rotation, use_paddle_fallback=True)
                 return "", "ocr_timeout", 0
+            # Bei anderen Fehlern auch PaddleOCR versuchen
+            if USE_PADDLEOCR and not use_paddle_fallback:
+                try:
+                    paddle_text = _ocr_image_paddle(image)
+                    if paddle_text:
+                        _LOGGER.info(f"Tesseract failed, PaddleOCR rescued: {len(paddle_text)} chars")
+                        return paddle_text, "", _score_text(paddle_text)
+                except Exception:
+                    pass
             return "", f"ocr_failed: {exc}", 0
         return text_value, "", _score_text(text_value)
 
@@ -925,6 +999,19 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
     text_length = len(text.strip())
     has_keywords = _count_keywords(text) > 0
     needs_rotation = text_length < 200 or not has_keywords
+    
+    # PaddleOCR-Fallback bei sehr schlechtem Tesseract-Score
+    if USE_PADDLEOCR and not needs_rotation and base_score < PADDLEOCR_FALLBACK_THRESHOLD:
+        try:
+            paddle_text = _ocr_image_paddle(image)
+            if paddle_text:
+                paddle_score = _score_text(paddle_text)
+                if paddle_score > base_score * 1.2:  # Mindestens 20% besser
+                    _LOGGER.info(f"PaddleOCR upgrade: {base_score} → {paddle_score}")
+                    return {"text": paddle_text, "error": "", "rotation": "0", "rotation_reason": "paddle_upgrade", "score": str(paddle_score)}
+        except Exception as e:
+            _LOGGER.debug(f"PaddleOCR upgrade attempt failed: {e}")
+    
     if not needs_rotation:
         return {"text": text, "error": "", "rotation": "0", "rotation_reason": "", "score": str(base_score)}
 
@@ -1831,12 +1918,38 @@ def detect_supplier_detailed(
     # Segmentgewichtung: header > body >> recipient
     segment_multiplier = {"header": 1.0, "body": 0.85, "recipient": 0.20, "role": 0.95}
 
+    # SPEZIAL: ÜBERNAHMESCHEIN mit KSR -> ignoriere alle anderen Kandidaten
+    # (KSR ist der einzige relevante Lieferant in ÜBERNAHMESCHEIN)
+    full_text_norm = _normalize_supplier_text(text)
+    is_uebernahmeschein = (doc_type_hint or "").upper() == "ÜBERNAHMESCHEIN"
+    has_ksr = "ksr" in full_text_norm or "ks-logistic" in full_text_norm or "ks logistic" in full_text_norm
+    
+    if is_uebernahmeschein and has_ksr:
+        # Return KSR sofort, ignoriere alle anderen Kandidaten
+        return (
+            "KSR",
+            0.99,
+            "uebernahmeschein_ksr_hardfix",
+            "KSR(uebernahmeschein)",
+            [
+                {
+                    "canonical": "KSR",
+                    "confidence": 0.99,
+                    "source": "uebernahmeschein_ksr_hardfix",
+                    "matched": "KSR detected in ÜBERNAHMESCHEIN",
+                    "segment": "body",
+                }
+            ],
+        )
+
     candidates: List[Dict[str, object]] = []
     candidates.extend(_find_supplier_candidates_in_segment(header_text, "header"))
     candidates.extend(_find_supplier_candidates_in_segment(body_text, "body"))
     candidates.extend(_find_supplier_candidates_in_segment(recipient_text, "recipient"))
 
     # ÜBERNAHMESCHEIN: Rollenblöcke priorisieren (Beförderer/Abfallentsorger)
+    # Special handling for KSR in ÜBERNAHMESCHEIN documents
+    ksr_detected_in_roles = False
     try:
         if (doc_type_hint or "").strip().upper() == "ÜBERNAHMESCHEIN":
             def _extract_role_block_local(marker: str, max_lines: int = 20) -> str:
@@ -1867,12 +1980,14 @@ def detect_supplier_detailed(
             role_joined = "\n".join([t for t in role_texts if t])
             role_norm = _normalize_supplier_text(role_joined)
             if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE):
-                candidates.append(
+                ksr_detected_in_roles = True
+                candidates.insert(
+                    0,
                     {
                         "canonical": "KSR",
-                        "confidence": 0.99,
-                        "source": "role_block",
-                        "matched": "Beförderer/Abfallentsorger",
+                        "confidence": 0.995,  # Sehr hoch, damit Heuristik nicht gewinnt
+                        "source": "role_block_ksr",
+                        "matched": "Beförderer/Abfallentsorger(KSR)",
                         "segment": "role",
                     }
                 )
@@ -1902,9 +2017,25 @@ def detect_supplier_detailed(
             }
         )
 
+    # Hard Fix KSR: wenn in ÜBERNAHMESCHEIN und KSR im Text vorhanden
+    # (entweder in Rollenblöcken oder als Keyword)
+    ksr_detected_direct = ksr_detected_in_roles or ("ksr" in _normalize_supplier_text(header_text + "\n" + body_text))
+    
+    if ksr_detected_direct and (doc_type_hint or "").upper() == "ÜBERNAHMESCHEIN":
+        candidates.insert(
+            0,
+            {
+                "canonical": "KSR",
+                "confidence": 0.995,  # Sehr hoch, damit Heuristik nicht gewinnt
+                "source": "hardfix_ksr",
+                "matched": "KSR(uebernahmeschein)",
+                "segment": "body",
+            }
+        )
+
     # Heuristik nur auf header/body, nicht auf recipient
-    # ABER: wenn Liebherr im Header erkannt wurde, nicht die Heuristik laufen lassen
-    if not liebherr_detected:
+    # ABER: wenn Liebherr im Header erkannt wurde ODER KSR in Rollen erkannt wurde, nicht die Heuristik laufen lassen
+    if not liebherr_detected and not ksr_detected_direct:
         guess, guess_line, guess_conf = _heuristic_supplier(header_text + "\n" + body_text)
         if guess:
             candidates.append(
@@ -2142,7 +2273,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     # Wenn Textlayer vorhanden, verwende ihn zur Lieferantenerkennung
     if textlayer_text.strip():
-        s, c, src, guess, cands = detect_supplier_detailed(textlayer_text)
+        # Frühe doc_type Erkennung für spezialisierte Supplier-Logik (z.B. ÜBERNAHMESCHEIN -> KSR Rollenblöcke)
+        doc_type_hint = None
+        if "uebernahmeschein" in textlayer_text.lower():
+            doc_type_hint = "ÜBERNAHMESCHEIN"
+        
+        s, c, src, guess, cands = detect_supplier_detailed(textlayer_text, doc_type_hint=doc_type_hint)
         supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
         supplier_candidates = cands or []
         
@@ -2201,7 +2337,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
             ocr_text = ocr_result.get("text", "")
             # Lieferantenerkennung per OCR nur falls vorher unbekannt oder geringe Konfidenz
             if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.5:
-                s, c, src, guess, cands = detect_supplier_detailed(ocr_text)
+                # Frühe doc_type Erkennung für spezialisierte Supplier-Logik
+                doc_type_hint = None
+                if "uebernahmeschein" in ocr_text.lower():
+                    doc_type_hint = "ÜBERNAHMESCHEIN"
+                
+                s, c, src, guess, cands = detect_supplier_detailed(ocr_text, doc_type_hint=doc_type_hint)
                 supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
                 supplier_candidates = cands or []
                 

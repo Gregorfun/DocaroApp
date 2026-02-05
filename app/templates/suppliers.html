@@ -5,6 +5,97 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docaro Lieferanten</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <style>
+      .alias-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5em;
+        align-items: flex-start;
+      }
+      .alias-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25em;
+        background: #eee;
+        padding: 0.25em 0.5em;
+        border-radius: 0.25em;
+        font-size: 0.9em;
+        word-break: break-word;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.2;
+      }
+      .alias-pill button {
+        margin-left: 0.25em;
+        padding: 0;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-size: 0.8em;
+        flex-shrink: 0;
+      }
+    </style>
+    <script>
+      (function () {
+        const scrollKey = "docaro_suppliers_scroll_y";
+        const anchorKey = "docaro_suppliers_anchor";
+
+        function toAnchorId(value) {
+          return (
+            "supplier-" +
+            String(value || "")
+              .trim()
+              .replace(/\s+/g, "-")
+              .replace(/\//g, "-")
+              .toLowerCase()
+          );
+        }
+
+        document.addEventListener(
+          "submit",
+          (event) => {
+            try {
+              const form = event.target;
+              if (!form || typeof form.querySelector !== "function") return;
+              sessionStorage.setItem(scrollKey, String(window.scrollY || 0));
+
+              // Best effort: keep an anchor to the affected supplier row.
+              const supplierField =
+                form.querySelector('input[name="supplier_name"]') ||
+                form.querySelector('input[name="old_name"]');
+              if (supplierField && supplierField.value) {
+                sessionStorage.setItem(anchorKey, toAnchorId(supplierField.value));
+              }
+            } catch (e) {
+              // ignore
+            }
+          },
+          true
+        );
+
+        window.addEventListener("load", () => {
+          try {
+            const hash = (window.location.hash || "").replace(/^#/, "");
+            const desired = hash || sessionStorage.getItem(anchorKey) || "";
+            if (desired) {
+              const el = document.getElementById(desired);
+              if (el) {
+                el.scrollIntoView({ block: "start" });
+                return;
+              }
+            }
+
+            const posRaw = sessionStorage.getItem(scrollKey);
+            const pos = posRaw ? parseInt(posRaw, 10) : 0;
+            if (!Number.isNaN(pos) && pos > 0) {
+              window.scrollTo(0, pos);
+            }
+          } catch (e) {
+            // ignore
+          }
+        });
+      })();
+    </script>
   </head>
   <body>
     <main class="container">
@@ -38,13 +129,13 @@
               </thead>
               <tbody>
                 {% for supplier in suppliers %}
-                  <tr>
+                  <tr id="supplier-{{ supplier.name|replace(' ', '-')|replace('/', '-')|lower }}">
                     <td>{{ supplier.name }}</td>
                     <td>
                       <div class="alias-list">
                         {% if supplier.aliases %}
                           {% for alias in supplier.aliases %}
-                            <span class="alias-pill">
+                            <span class="alias-pill" title="{{ alias }}">
                               {{ alias }}
                               <form action="{{ url_for('suppliers_alias_remove') }}" method="post" class="inline-form-mini">
                                 <input type="hidden" name="supplier_name" value="{{ supplier.name }}" />

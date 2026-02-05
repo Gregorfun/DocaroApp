@@ -2488,6 +2488,41 @@ def confirm_doc_type():
     return redirect(url_for("index"))
 
 
+@app.post("/confirm_review_state")
+def confirm_review_state():
+    """Ändert den Review-Status eines Dokuments (fertig, in Bearbeitung, unvollständig)."""
+    file_id = request.form.get("file_id", "").strip()
+    if not file_id:
+        abort(404)
+    result = _result_for_file_id(file_id)
+    if not result:
+        abort(404)
+
+    raw_val = (request.form.get("review_state", "") or "").strip()
+    allowed = {"unvollstaendig", "in_bearbeitung", "fertig"}
+    if raw_val not in allowed:
+        message = "Status ungültig."
+        if _is_ajax_request():
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message)
+        return redirect(url_for("index"))
+
+    # Setze needs_review basierend auf Status
+    needs_review = (raw_val == "in_bearbeitung")
+    results = _load_last_results() or []
+    for item in results:
+        if item.get("file_id") == file_id:
+            item["needs_review"] = "1" if needs_review else ""
+            break
+    _save_last_results(results)
+
+    message = f"Status zu '{raw_val}' gesetzt."
+    if _is_ajax_request():
+        return jsonify(_row_payload(file_id, message=message))
+    flash(message)
+    return redirect(url_for("index"))
+
+
 @app.post("/confirm_doc_number")
 def confirm_doc_number():
     file_id = request.form.get("file_id", "").strip()
@@ -3160,6 +3195,42 @@ def download(filename: str):
     except Exception as exc:
         logger.warning("Failed to register download cleanup: %s", exc)
     return resp
+
+
+@app.get("/pdf_thumbnail/<file_id>")
+def pdf_thumbnail(file_id: str):
+    """Liefert ein Thumbnail/Vorschaubild der ersten Seite des PDFs."""
+    result = _result_for_file_id(file_id)
+    if not result:
+        abort(404)
+
+    pdf_path = _resolve_file_path(file_id)
+    if not pdf_path or not pdf_path.exists():
+        abort(404)
+
+    try:
+        from pdf2image import convert_from_path
+        from io import BytesIO
+        
+        # Rendere nur die erste Seite mit niedriger DPI für schnelle Thumbnail-Erzeugung
+        try:
+            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=100)
+            if not images:
+                abort(500)
+        except Exception as e:
+            logger.warning(f"PDF rendering failed for {file_id}: {e}")
+            abort(500)
+
+        # Konvertiere PIL Image zu JPEG
+        buffer = BytesIO()
+        images[0].thumbnail((300, 400))  # Max 300x400px für Thumbnail
+        images[0].save(buffer, format="JPEG", quality=75)
+        buffer.seek(0)
+
+        return send_file(buffer, mimetype="image/jpeg", as_attachment=False)
+    except Exception as exc:
+        logger.warning(f"PDF thumbnail generation failed for {file_id}: {exc}")
+        abort(500)
 
 
 @app.get("/download_all.zip")

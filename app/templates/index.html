@@ -250,13 +250,39 @@
                       </span>
                     </div>
                     <div class="result-action-field">
-                      <span class="action-message" data-role="message"></span>
+                      <details class="action-details" data-doc-id="{{ item.file_id or '' }}" data-edit-kind="review_state">
+                        <summary class="action-summary">Status bearbeiten</summary>
+                        <form action="{{ url_for('confirm_review_state') }}" method="post" class="inline-form action-form" data-ajax="1">
+                          <label class="field-label">Status</label>
+                          <select name="review_state" class="action-select">
+                            <option value="unvollstaendig" {% if row_state == "unvollstaendig" %}selected{% endif %}>unvollständig</option>
+                            <option value="in_bearbeitung" {% if row_state == "in_bearbeitung" %}selected{% endif %}>in Bearbeitung</option>
+                            <option value="fertig" {% if row_state == "fertig" %}selected{% endif %}>fertig</option>
+                          </select>
+                          <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />
+                          <div class="action-actions">
+                            <button type="submit" class="action-button">Status speichern</button>
+                          </div>
+                        </form>
+                      </details>
                     </div>
                   </div>
                 </div>
                   
                   <div class="result-details" data-detail-row="{{ item.file_id or '' }}" hidden>
                     <div class="detail-grid">
+                      <!-- PDF Thumbnail Preview -->
+                      <div class="detail-span-full">
+                        <span class="detail-label">PDF-Vorschau:</span>
+                        {% if item.file_id %}
+                          <div class="pdf-thumbnail-container">
+                            <img src="{{ url_for('pdf_thumbnail', file_id=item.file_id) }}" alt="PDF-Vorschau" class="pdf-thumbnail" loading="lazy" />
+                          </div>
+                        {% else %}
+                          <span class="muted">Keine Vorschau verfügbar</span>
+                        {% endif %}
+                      </div>
+                      
                       <div><span class="detail-label">Quelle:</span> <span data-field="supplier_source">{{ item.supplier_source or '-' }}</span></div>
                       <div><span class="detail-label">Sicherheit:</span> <span class="{% if item.supplier_confidence %}{% if conf >= 0.85 %}conf-high{% elif conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}{% endif %}" data-field="supplier_confidence">{{ item.supplier_confidence or '-' }}</span></div>
                       <div><span class="detail-label">Fehler:</span> <span data-field="error">{{ item.error or '-' }}</span></div>

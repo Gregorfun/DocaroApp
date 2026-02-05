@@ -35,6 +35,8 @@ class Config:
     # Optional: KI-OCR (PaddleOCR) als Fallback bei schwierigen Scan-PDFs
     USE_PADDLEOCR = os.getenv("DOCARO_USE_PADDLEOCR", "0") == "1"
     PADDLEOCR_LANG = os.getenv("DOCARO_PADDLEOCR_LANG", "german")
+    PADDLEOCR_FALLBACK_THRESHOLD = int(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle
+    PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
     TESSERACT_CMD = os.getenv("DOCARO_TESSERACT_CMD")
     POPPLER_BIN = os.getenv("DOCARO_POPPLER_BIN")
     # Auto-Sort Defaults (können via Settings-Seite überschrieben werden)
