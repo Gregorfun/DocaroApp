@@ -107,7 +107,7 @@ q = Queue('default', connection=redis_conn, default_timeout=3600)  # 1h timeout
 # WICHTIG: Unter Gunicorn laufen mehrere Worker-Prozesse; ein Reset pro Worker-Start
 # kann Uploads/Outputs löschen, sobald ein Worker neu startet. Deshalb nur 1x pro
 # systemd INVOCATION_ID resetten.
-if os.getenv("DOCARO_STATELESS", "1") == "1" and os.getenv("DOCARO_WORKER", "0") != "1":
+if os.getenv("DOCARO_STATELESS", "0") == "1" and os.getenv("DOCARO_WORKER", "0") != "1":
     reset_runtime_state_once(
         RuntimeStateConfig(
             repo_root=BASE_DIR,

@@ -265,22 +265,28 @@ def _resolve_tesseract_cmd() -> Tuple[Optional[Path], bool]:
     if config.TESSERACT_CMD:
         candidate = _first_path_from_env(config.TESSERACT_CMD)
         if candidate and candidate.exists():
-            return candidate, True
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate, True
+            if candidate.is_dir():
+                exe_candidate = candidate / "tesseract.exe"
+                if exe_candidate.exists() and os.access(exe_candidate, os.X_OK):
+                    return exe_candidate, True
         if candidate and candidate.is_dir():
             exe_candidate = candidate / "tesseract.exe"
-            if exe_candidate.exists():
+            if exe_candidate.exists() and os.access(exe_candidate, os.X_OK):
                 return exe_candidate, True
-    fallback_paths = [
-        BASE_DIR / "Tesseract OCR Windows installer" / "tesseract.exe",
-        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
-    ]
-    for candidate in fallback_paths:
-        if candidate.exists():
-            return candidate, True
     which_path = shutil.which("tesseract")
     if which_path:
         return Path(which_path), True
+    if os.name == "nt":
+        fallback_paths = [
+            BASE_DIR / "Tesseract OCR Windows installer" / "tesseract.exe",
+            Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+            Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+        ]
+        for candidate in fallback_paths:
+            if candidate.exists() and os.access(candidate, os.X_OK):
+                return candidate, True
     return None, False
 
 
