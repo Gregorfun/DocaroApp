@@ -64,12 +64,19 @@ Basis-Setup (Windows):
 - Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki
 - Poppler: falls nicht im System installiert, nutze ein lokales Poppler-Bundle
 
-### Docker-Services (Optional)
+### 🤖 ML Training (Automatisch, Nightly)
 
-```powershell
-# Starte Qdrant, Label Studio, MLflow
-docker-compose -f docker/docker-compose.yml up -d
+Docaro trainiert jedes Nacht um 02:00 Uhr automatisch neue Modelle basierend auf Korrektionen:
+
+```bash
+# ML-Training Service Status
+sudo systemctl status docaro-ml-scheduler
+
+# Trainings-Logs anschauen
+tail -f /opt/Docaro/data/logs/extract_debug.log | grep -i training
 ```
+
+→ Modelle werden besser, je mehr du korrigierst!
 
 ### Start der Web-App
 
@@ -143,10 +150,13 @@ print(f"Dokumenttyp: {result.document_type}")
 ### OCR auf gescanntem PDF
 
 ```python
-from pipelines.ocr_processor import process_with_ocr
+from core.extractor import ocr_first_page
+from pathlib import Path
 
-result = process_with_ocr(pdf_path, method="auto")
-# Automatische Wahl: OCRmyPDF → PaddleOCR → EasyOCR
+# Tesseract als Primary, PaddleOCR als Fallback (bei Score < 400)
+result = ocr_first_page(Path("dokument.pdf"), poppler_bin=None)
+print(f"Erkannter Text: {result['text']}")
+print(f"Score: {result['score']}")
 ```
 
 ### Semantische Suche
@@ -317,11 +327,13 @@ pytest pipelines/tests/ --cov=pipelines --cov-report=html
 
 ## 📖 Weitere Dokumentation
 
-- **Docling**: https://github.com/docling-project/docling
-- **PaddleOCR**: https://github.com/PaddlePaddle/PaddleOCR
-- **MLflow**: https://mlflow.org/docs/latest/
-- **Label Studio**: https://labelstud.io/guide/
-- **Qdrant**: https://qdrant.tech/documentation/
+### Aktiv genutzten Tools
+- **PaddleOCR**: https://github.com/PaddlePaddle/PaddleOCR (Fallback-OCR für schwierige Scans)
+- **MLflow**: https://mlflow.org/docs/latest/ (Experiment-Tracking für ML-Training)
+
+### Setup & Deployment
+- **Tesseract OCR**: https://github.com/UB-Mannheim/tesseract/wiki (Primary OCR)
+- **PDF-Verarbeitung**: pdf2image, PyPDF2, pdfplumber (Dokumentenhandling)
 
 ---
 
