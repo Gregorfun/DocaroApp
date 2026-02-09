@@ -18,20 +18,26 @@ suppliers:
       - "(?i)w\\s*[+&]\\s*m"
     domain_hints: ["wm-se.com"]
 
-  # Ortojohann + Kraft
+  # Ortjohann + Kraft
   OK:
-    canonical: "Ortojohann+Kraft"
+    canonical: "Orjohann Kraft"
     aliases:
+      - "Ortjohann"
+      - "Ortjohann+Kraft"
+      - "Ortjohann & Kraft"
+      - "Ortjohann + Kraft"
+      # toleriert häufige OCR/Alt-Schreibweise
       - "Ortojohann"
       - "Ortojohann+Kraft"
       - "Ortojohann & Kraft"
       - "Ortojohann + Kraft"
       - "OK"
+      - "Ortjohann GmbH"
       - "Ortojohann GmbH"
       - "Kraft GmbH"
     regex_patterns:
-      - "(?i)ortojohann?"
-      - "(?i)ortojohann.*kraft"
+      - "(?i)ort[ji]ohann?"
+      - "(?i)ort[ji]ohann.*kraft"
     # Nur "OK" alleine ist zu generisch, muss mit context geprüft werden
     context_required:
       - "OK"  # Nur wenn im Kontext Hinweise auf Autoteile/KFZ
@@ -82,7 +88,7 @@ suppliers:
 
   # WFI Wireless Funk- und Informationstechnik
   WFI:
-    canonical: "WFI"
+    canonical: "WFI Funktechnik GmbH"
     aliases:
       - "WFI"
       - "Wireless Funk"
@@ -129,8 +135,8 @@ suppliers:
       - "(?i)hofmeister\\s*[&+]\\s*meincke"
     # Einzelner Name nur wenn beide vorkommen oder typische Produkte (Reifen, etc.)
     context_patterns:
-      - "hofmeister": ["meincke", "reifen", "pkw"]
-      - "meincke": ["hofmeister", "reifen", "pkw"]
+      hofmeister: ["meincke", "reifen", "pkw"]
+      meincke: ["hofmeister", "reifen", "pkw"]
 
   # Franz Bracht (eigene Firma)
   BRACHT:

@@ -4,6 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Upload Progress Demo</title>
+  <script>
+    // Theme sofort setzen um Flash zu verhindern
+    (function() {
+      const isDarkMode = localStorage.getItem('docaro-dark-mode');
+      if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark-mode');
+      }
+    })();
+  </script>
+  <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
   <style>
     :root {
       --bg: #f2f1ed;
@@ -14,6 +24,15 @@
       --border: #d9d6cf;
     }
     
+    html.dark-mode {
+      --bg: #1a1a1a;
+      --panel: #2d2d2d;
+      --text: #e4e4e4;
+      --muted: #999999;
+      --accent: #4a9b9e;
+      --border: #404040;
+    }
+    
     body {
       font-family: "Trebuchet MS", "Segoe UI", sans-serif;
       background: linear-gradient(180deg, #f2f1ed 0%, #e7e4dd 100%);
@@ -21,6 +40,10 @@
       max-width: 900px;
       margin: 0 auto;
       padding: 32px 20px;
+    }
+    
+    html.dark-mode body {
+      background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
     }
     
     h1 {

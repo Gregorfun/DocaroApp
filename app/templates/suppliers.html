@@ -4,7 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docaro Lieferanten</title>
+    <script>
+      // Theme sofort setzen um Flash zu verhindern
+      (function() {
+        const isDarkMode = localStorage.getItem('docaro-dark-mode');
+        if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark-mode');
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
     <style>
       .alias-list {
         display: flex;
@@ -103,7 +113,10 @@
         <h1>Lieferantenverwaltung</h1>
         <p class="muted">Lieferanten bearbeiten, Aliase pflegen oder entfernen.</p>
         <p class="meta-links">
-          <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+          <span>
+            <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+          </span>
+          <button id="theme-toggle-btn" type="button" aria-label="Design-Modus umschalten">🌙</button>
         </p>
         {% with messages = get_flashed_messages() %}
           {% if messages %}

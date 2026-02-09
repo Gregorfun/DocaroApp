@@ -178,7 +178,10 @@ class SupplierCanonicalizer:
             return match
         
         # 2. Regex-Pattern-Matches
-        match = self._check_regex_patterns(raw_supplier_text, full_ocr_text)
+        # Wichtig: Regex nur auf dem erkannten Supplier-Text anwenden.
+        # Das Voll-OCR enthält oft Empfänger/Lieferanschrift und darf die
+        # Canonicalisierung nicht auf einen anderen Supplier "umkippen".
+        match = self._check_regex_patterns(raw_supplier_text)
         if match:
             return match
         
@@ -239,13 +242,9 @@ class SupplierCanonicalizer:
         
         return None
     
-    def _check_regex_patterns(
-        self,
-        raw_text: str,
-        full_text: Optional[str]
-    ) -> Optional[SupplierMatch]:
+    def _check_regex_patterns(self, raw_text: str) -> Optional[SupplierMatch]:
         """Prüft Regex-Pattern-Matches mit pre-compiled patterns."""
-        search_text = full_text if full_text else raw_text
+        search_text = raw_text
         
         for supplier_key, compiled_list in self._compiled_patterns.items():
             canonical = self.suppliers[supplier_key].get("canonical", supplier_key)

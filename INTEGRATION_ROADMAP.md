@@ -5,6 +5,20 @@ Docaro wird zu einem robusten, ML-gestützten Dokumenten-Verarbeitungssystem mit
 
 ---
 
+## 📥 Roadmap-Item: Windows-„Lokaler“ Eingangsordner (SMB/CIFS)
+
+**Problem**: Ein auf Linux laufender Docaro-Service kann nicht direkt auf einen Windows-Desktop-Pfad wie `C:\Users\...` zugreifen.
+
+**Ziel**: Automatische Verarbeitung eines Windows-Ordners über eine Netzwerkfreigabe (SMB/CIFS) inkl. sauberer Doku, Mount-Setup und Monitoring.
+
+**Aufgaben (Backlog)**:
+- [ ] Doku: Windows-Ordner freigeben + Linux SMB/CIFS Mount (`/mnt/...`) inkl. Credentials-Handhabung (systemd EnvironmentFile / secrets)
+- [ ] Optional: Helper-Script für Mount-Setup + fstab/systemd-mount Beispiel
+- [ ] UI/Settings: Hinweis/Validierung, wenn Windows-Pfad auf Linux konfiguriert ist (statt stiller "0 PDFs")
+- [ ] Betrieb: Healthcheck/Log-Hinweise, wenn Share nicht erreichbar ist (z.B. Mount down)
+
+---
+
 ## 📊 System-Architektur
 
 ```

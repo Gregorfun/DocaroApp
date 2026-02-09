@@ -40,6 +40,10 @@ class AutoSortSettings:
     confidence_threshold: float = 0.80
     fallback_folder: str = "_Unsortiert (Prüfen)"
 
+    # Inbox / Eingang verarbeiten
+    inbox_dir: Path = Path()
+    inbox_interval_minutes: int = 0
+
     def normalized_format(self) -> str:
         fmt = (self.folder_format or "A").upper()
         return fmt if fmt in ("A", "B", "C") else "A"
@@ -77,6 +81,18 @@ def load_settings(path: Path, defaults: AutoSortSettings) -> AutoSortSettings:
         return defaults
     base_dir_raw = str(raw.get("base_dir", str(defaults.base_dir)) or "").strip()
     base_dir = Path(base_dir_raw).expanduser() if base_dir_raw else defaults.base_dir
+
+    inbox_dir_raw = str(raw.get("inbox_dir", str(defaults.inbox_dir)) or "").strip()
+    inbox_dir = Path(inbox_dir_raw).expanduser() if inbox_dir_raw else defaults.inbox_dir
+
+    inbox_interval_raw = raw.get("inbox_interval_minutes", defaults.inbox_interval_minutes)
+    try:
+        inbox_interval_minutes = int(str(inbox_interval_raw).strip() or "0")
+    except (TypeError, ValueError):
+        inbox_interval_minutes = int(defaults.inbox_interval_minutes or 0)
+    if inbox_interval_minutes < 0:
+        inbox_interval_minutes = 0
+
     return AutoSortSettings(
         enabled=bool(raw.get("enabled", defaults.enabled)),
         base_dir=base_dir,
@@ -84,6 +100,8 @@ def load_settings(path: Path, defaults: AutoSortSettings) -> AutoSortSettings:
         mode=str(raw.get("mode", defaults.mode)),
         confidence_threshold=float(raw.get("confidence_threshold", defaults.confidence_threshold)),
         fallback_folder=str(raw.get("fallback_folder", defaults.fallback_folder)),
+        inbox_dir=inbox_dir,
+        inbox_interval_minutes=inbox_interval_minutes,
     )
 
 
@@ -91,6 +109,7 @@ def save_settings(path: Path, settings: AutoSortSettings) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(settings)
     payload["base_dir"] = str(settings.base_dir)
+    payload["inbox_dir"] = str(settings.inbox_dir)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)

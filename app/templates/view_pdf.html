@@ -4,7 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }}</title>
+    <script>
+      // Theme sofort setzen um Flash zu verhindern
+      (function() {
+        const isDarkMode = localStorage.getItem('docaro-dark-mode');
+        if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark-mode');
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
   </head>
   <body class="viewer-body">
     <main class="viewer-shell">
@@ -17,6 +27,7 @@
             {% if review_total %}
               <span class="viewer-badge">{{ review_index or 1 }}/{{ review_total }}</span>
             {% endif %}
+            <button id="theme-toggle-btn" type="button" aria-label="Design-Modus umschalten" style="margin-left: 8px;"></button>
           </div>
         </div>
 

@@ -368,18 +368,39 @@ SUPPLIER_KEYWORDS = {
     "Georg Zopf": "Zopf",
     "WM Fahrzeugteile": "WM",
     "WM SE": "WM",
-    "WFI Wireless Funk": "WFI",
+    "WFI Wireless Funk": "WFI Funktechnik GmbH",
+    "Wireless Funk": "WFI Funktechnik GmbH",
+    "WFI GmbH": "WFI Funktechnik GmbH",
+    "Informationstechnik GmbH": "WFI Funktechnik GmbH",
     "Hofmeister & Meincke": "Hofmeister",
     "Foerch GmbH": "Foerch",
     "Borgmann": "VW Borgmann",
     "Fuchs Lubricants Germany GmbH": "Fuchs",
-    "Ortjohann und Kraft Werkzeug und Maschinenhandel GmbH": "Ortjohann+ Kraft",
+    "Ortjohann und Kraft Werkzeug und Maschinenhandel GmbH": "Orjohann Kraft",
+    "Ortjohann und Kraft": "Orjohann Kraft",
+    "Ortjohann Kraft": "Orjohann Kraft",
+    "Ortjohann + Kraft": "Orjohann Kraft",
     "PV Automotive GmbH": "PV Automotive",
     "PV Automotive": "PV Automotive",
     "Foerch": "Foerch",
     "Liebherr": "Liebherr",
     "KSR": "KSR",
 }
+
+# RECIPIENT_BLACKLIST: Diese Firmennamen sind EMPFÄNGER, niemals Lieferanten
+# Wird in Heuristik geprüft, um falsche Lieferanten-Erkennungen zu verhindern
+RECIPIENT_BLACKLIST = [
+    "franz bracht",
+    "franz bracht kran",
+    "franz bracht kranvermietung",
+    "bracht kran",
+    "bracht kranvermietung",
+    "bracht autokrane",
+    "kran vermietung",
+    "kran vermietung gmbh",
+    "bruchfeld 91",
+    "47809 krefeld",
+]
 
 VERGOELST_ALIASES = [
     "verg lst",
@@ -571,7 +592,27 @@ CANONICAL_SUPPLIERS = {
     "vergoelst": "Vergoelst",
     "vergolst": "Vergoelst",
     "verglst": "Vergoelst",
+    "wfi": "WFI Funktechnik GmbH",
+    "wfi funktechnik": "WFI Funktechnik GmbH",
+    "wfi wireless funk": "WFI Funktechnik GmbH",
+    "wireless funk": "WFI Funktechnik GmbH",
+    "informationstechnik gmbh": "WFI Funktechnik GmbH",
+    "wfi funktechnik gmbh": "WFI Funktechnik GmbH",
+    "wfi funktechnik de": "WFI Funktechnik GmbH",
+    "wfi funktechnik": "WFI Funktechnik GmbH",
+    "ortjohann kraft": "Orjohann Kraft",
+    "ortjohann und kraft": "Orjohann Kraft",
+    "ortjohann + kraft": "Orjohann Kraft",
+    "ortjohann kraft werkzeug": "Orjohann Kraft",
 }
+
+
+def _is_never_supplier(value: str) -> bool:
+    """True, wenn der Text eindeutig Empfänger/Lieferadresse ist (nie Supplier)."""
+    norm = _normalize_supplier_text(value or "")
+    if not norm:
+        return False
+    return any(term in norm for term in RECIPIENT_BLACKLIST)
 
 # LABEL_PATTERNS und LABEL_PRIORITY aus constants.py verwendet
 
@@ -1748,15 +1789,16 @@ def _find_supplier_candidates_in_segment(text: str, segment_name: str) -> List[D
     db_hit = _detect_supplier_from_db(text)
     if db_hit:
         supplier_name, alias = db_hit
-        candidates.append(
-            {
-                "canonical": _canonicalize_supplier(supplier_name),
-                "confidence": 0.90,
-                "source": "db",
-                "matched": alias,
-                "segment": segment_name,
-            }
-        )
+        if not (_is_never_supplier(supplier_name) or _is_never_supplier(alias)):
+            candidates.append(
+                {
+                    "canonical": _canonicalize_supplier(supplier_name),
+                    "confidence": 0.90,
+                    "source": "db",
+                    "matched": alias,
+                    "segment": segment_name,
+                }
+            )
 
     # Keyword-Hits (inkl. Vergoelst)
     keyword_candidates = list(SUPPLIER_KEYWORDS.items())
@@ -1776,6 +1818,8 @@ def _find_supplier_candidates_in_segment(text: str, segment_name: str) -> List[D
         if not normalized_keyword:
             continue
         if normalized_keyword in normalized_text:
+            if _is_never_supplier(shortname) or _is_never_supplier(keyword):
+                continue
             candidates.append(
                 {
                     "canonical": _canonicalize_supplier(shortname),
@@ -1823,6 +1867,10 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
         "adressat",
         "adresse",
         "datum",
+        "lieferanschrift",
+        "lieferdatum",
+        "kunde",
+        "kundennummer",
     ]
     endings = [
         "gmbh",
@@ -1865,6 +1913,11 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
         normalized_line = _normalize_supplier_text(line)
         if not normalized_line or any(term in normalized_line for term in blocked_terms):
             continue
+        
+        # Empfänger-Blacklist prüfen (Franz Bracht etc.)
+        if any(blacklisted in normalized_line for blacklisted in RECIPIENT_BLACKLIST):
+            continue
+        
         tokens = set(normalized_line.split())
         score = 0.0
         # Endungen nur als ganze Wörter werten ("ag" soll nicht in "tag" matchen).
@@ -1938,10 +1991,56 @@ def detect_supplier_detailed(
             ],
         )
 
+    # Empfänger-/Lieferanschrift-Block darf NIE Lieferant sein.
+    # Deshalb: recipient_text wird für Supplier-Erkennung strikt ignoriert.
     candidates: List[Dict[str, object]] = []
+
+    # Explizite Rules zuerst (robust gegen OCR/Layout)
+    letterhead_lines = list(segmented.header_lines) + list(segmented.body_lines[-30:])
+    letterhead_text = "\n".join([ln for ln in letterhead_lines if (ln or "").strip()])
+    letterhead_norm = _normalize_supplier_text(letterhead_text)
+
+    wfi_detected = (
+        re.search(r"\bwfi\b", letterhead_norm, flags=re.IGNORECASE) is not None
+        or "wireless funk" in letterhead_norm
+        or "www wfi funktechnik de" in letterhead_norm
+        or "wfi funktechnik de" in letterhead_norm
+        or "info wfi funktechnik de" in letterhead_norm
+    )
+    if wfi_detected:
+        candidates.insert(
+            0,
+            {
+                "canonical": "WFI Funktechnik GmbH",
+                "confidence": 0.995,
+                "source": "explicit_wfi",
+                "matched": "WFI(letterhead)",
+                "segment": "header",
+            },
+        )
+
+    ortjohann_detected = (
+        ("ortjohann" in letterhead_norm and "kraft" in letterhead_norm)
+        or "siemensstrasse 6" in letterhead_norm
+        or "33397 rietberg" in letterhead_norm
+    )
+    if ortjohann_detected:
+        candidates.insert(
+            0,
+            {
+                "canonical": "Orjohann Kraft",
+                "confidence": 0.995,
+                "source": "explicit_ortjohann_kraft",
+                "matched": "Ortjohann+Kraft(letterhead)",
+                "segment": "header",
+            },
+        )
+
     candidates.extend(_find_supplier_candidates_in_segment(header_text, "header"))
     candidates.extend(_find_supplier_candidates_in_segment(body_text, "body"))
-    candidates.extend(_find_supplier_candidates_in_segment(recipient_text, "recipient"))
+    
+    # Initialisiere has_keyword_hit - wird später durch Hard-Fixes aktualisiert
+    has_keyword_hit = any(c.get("source") in ["keywords", "db"] for c in candidates)
 
     # ÜBERNAHMESCHEIN: Rollenblöcke priorisieren (Beförderer/Abfallentsorger)
     # Special handling for KSR in ÜBERNAHMESCHEIN documents
@@ -2006,12 +2105,15 @@ def detect_supplier_detailed(
             0,
             {
                 "canonical": "Liebherr",
-                "confidence": 0.995,  # Sehr hoch, damit Heuristik nicht gewinnt
+                "confidence": 0.99,
                 "source": "hardfix_liebherr",
                 "matched": "Liebherr(header_detected)",
                 "segment": "header",
             }
         )
+        has_keyword_hit = True  # Hard-Fix zählt als Keyword-Hit
+
+    # Entfernt: hardfix_wfi/hardfix_ortjohann auf Fulltext (zu fehleranfällig, kann Empfängerblock triggern).
 
     # Hard Fix KSR: wenn in ÜBERNAHMESCHEIN und KSR im Text vorhanden
     # (entweder in Rollenblöcken oder als Keyword)
@@ -2029,9 +2131,9 @@ def detect_supplier_detailed(
             }
         )
 
-    # Heuristik nur auf header/body, nicht auf recipient
-    # ABER: wenn Liebherr im Header erkannt wurde ODER KSR in Rollen erkannt wurde, nicht die Heuristik laufen lassen
-    if not liebherr_detected and not ksr_detected_direct:
+    # Heuristik NUR wenn KEIN Keyword/DB-Hit gefunden wurde
+    # Verhindert falsche "Franz Bracht" Erkennung bei bekannten Lieferanten
+    if not has_keyword_hit:
         guess, guess_line, guess_conf = _heuristic_supplier(header_text + "\n" + body_text)
         if guess:
             candidates.append(
@@ -2049,6 +2151,14 @@ def detect_supplier_detailed(
         seg = str(c.get("segment") or "body")
         base = float(c.get("confidence") or 0.0)
         c["confidence"] = round(base * segment_multiplier.get(seg, 0.85), 4)
+
+    # Ausschlussregel: Empfänger/Lieferadresse darf NIE Supplier sein (z.B. Franz Bracht)
+    candidates = [
+        c
+        for c in candidates
+        if not _is_never_supplier(str(c.get("canonical") or ""))
+        and not _is_never_supplier(str(c.get("matched") or ""))
+    ]
 
     # Deduplicate by canonical+segment+source+matched, keep max confidence
     dedup: Dict[tuple, Dict[str, object]] = {}
@@ -2221,7 +2331,22 @@ def _move_pdf_with_name(pdf_path: Path, output_dir: Path, filename: str) -> Tupl
                     pass
                 # Echtes Duplikat: unique path
                 target_path = get_unique_path(output_dir, filename)
-            pdf_path.replace(target_path)
+            try:
+                pdf_path.replace(target_path)
+            except OSError as exc:
+                # Cross-device move (e.g., /tmp -> /opt on different mounts)
+                # Path.replace uses os.rename under the hood, which fails with EXDEV.
+                # Fall back to copy+unlink to keep the pipeline working.
+                if getattr(exc, "errno", None) == 18:  # EXDEV
+                    shutil.copy2(pdf_path, target_path)
+                    try:
+                        pdf_path.unlink(missing_ok=True)
+                    except TypeError:
+                        # Python < 3.8 compatibility
+                        if pdf_path.exists():
+                            pdf_path.unlink()
+                else:
+                    raise
         return target_path, ""
     except OSError as exc:
         return None, f"move_failed: {exc}"
@@ -2310,17 +2435,33 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     date_confidence = date_pick.get("confidence", 0.0) or 0.0
     date_evidence = date_pick.get("evidence", "") or ""
 
+    # Wenn der "Lieferant" eigentlich der Empfänger ist (z.B. Franz Bracht),
+    # dürfen OCR/Paddle dennoch für die Lieferantenerkennung laufen.
+    supplier_is_recipient = str(supplier or "").strip().lower() == "franz bracht"
+
     # Early-Exit: Wenn Textlayer ausreichende Konfidenz liefert, überspringe OCR komplett
     skip_ocr = (
-        date_obj and date_confidence >= 0.80 and
-        supplier and supplier != "Unbekannt" and supplier_confidence >= 0.80
+        (not supplier_is_recipient)
+        and date_obj and date_confidence >= 0.80
+        and supplier and supplier != "Unbekannt" and supplier_confidence >= 0.80
     )
 
     # 3) Falls Textlayer nicht aussagekräftig: OCR als Fallback durchführen
     rotation_value = 0
     images: List[object] = []
     ocr_text = ""
-    if not skip_ocr and ((not textlayer_text.strip()) or (not date_obj)):
+    need_supplier_ocr = (
+        supplier_is_recipient
+        or (not supplier)
+        or supplier == "Unbekannt"
+        or float(supplier_confidence or 0.0) < 0.75
+    )
+
+    # OCR ist nötig wenn:
+    # - kein Textlayer vorhanden ist
+    # - Datum im Textlayer fehlt
+    # - oder Supplier im Textlayer sehr wahrscheinlich Empfänger/unsicher ist
+    if not skip_ocr and ((not textlayer_text.strip()) or (not date_obj) or need_supplier_ocr):
         images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
         if render_error and not textlayer_err:
             # Nur melden, wenn nicht bereits textlayer Fehler
@@ -2331,8 +2472,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         ocr_result = _ocr_images_best(images or [], force_best=False) if images else {"text": "", "error": render_error or ""}
         if not ocr_result.get("error"):
             ocr_text = ocr_result.get("text", "")
-            # Lieferantenerkennung per OCR nur falls vorher unbekannt oder geringe Konfidenz
-            if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.5:
+            # Lieferantenerkennung per OCR:
+            # - wenn vorher unbekannt/low confidence
+            # - oder wenn der bisherige Treffer sehr wahrscheinlich der Empfänger ist (Franz Bracht)
+            if (not supplier) or supplier == "Unbekannt" or supplier_is_recipient or supplier_confidence < 0.75:
                 # Frühe doc_type Erkennung für spezialisierte Supplier-Logik
                 doc_type_hint = None
                 if "uebernahmeschein" in ocr_text.lower():
@@ -2409,18 +2552,22 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                     date_evidence = str(pick2.get("evidence", "") or "")
 
         # Optional: KI-OCR Fallback (PaddleOCR) nur wenn weiterhin unsicher
+        supplier_is_recipient = str(supplier or "").strip().lower() == "franz bracht"
         need_paddle = (
             (not date_obj or date_confidence < 0.75)
-            or (not supplier or supplier == "Unbekannt" or supplier_confidence < 0.70)
+            or supplier_is_recipient
+            or (not supplier or supplier == "Unbekannt" or float(supplier_confidence or 0.0) < 0.75)
         )
         if need_paddle and images and USE_PADDLEOCR:
             try:
                 paddle_text, paddle_conf, paddle_err = _paddle_ocr_image(images[0])
                 if paddle_text and not paddle_err:
-                    # Lieferant: nur überschreiben, wenn wir dadurch besser werden
-                    if (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.70:
+                    # Lieferant: überschreiben wenn unbekannt/unsicher ODER Empfänger-Treffer
+                    if supplier_is_recipient or (not supplier) or supplier == "Unbekannt" or supplier_confidence < 0.75:
                         s2, c2, src2, guess2, cands2 = detect_supplier_detailed(paddle_text)
-                        if s2 and s2 != "Unbekannt" and c2 >= supplier_confidence:
+                        # Wenn bisher Empfänger-Treffer: jede echte Supplier-Erkennung bevorzugen.
+                        min_needed = 0.0 if supplier_is_recipient else float(supplier_confidence or 0.0)
+                        if s2 and s2 != "Unbekannt" and c2 >= min_needed:
                             supplier, supplier_confidence, supplier_source, supplier_guess_line = s2, c2, "paddle", guess2
                             supplier_candidates = cands2 or []
 
@@ -2792,18 +2939,24 @@ def _append_log(log_path: Path, row: Dict[str, str]) -> None:
         "tesseract_path",
         "poppler_bin",
     ]
-    with _LOG_LOCK:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_exists = log_path.exists()
-        with log_path.open("a", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=log_fields,
-            )
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(row)
-        _trim_run_log(log_path, log_fields)
+    try:
+        with _LOG_LOCK:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_exists = log_path.exists()
+            with log_path.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=log_fields,
+                )
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(row)
+            try:
+                _trim_run_log(log_path, log_fields)
+            except OSError as exc:
+                _LOGGER.warning(f"Run log trim failed ({log_path}): {exc}")
+    except OSError as exc:
+        _LOGGER.warning(f"Run log write failed ({log_path}): {exc}")
 
 
 def _trim_run_log(log_path: Path, log_fields: List[str]) -> None:

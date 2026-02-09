@@ -4,18 +4,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docaro Einstellungen</title>
+    <script>
+      // Theme sofort setzen um Flash zu verhindern
+      (function() {
+        const isDarkMode = localStorage.getItem('docaro-dark-mode');
+        if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark-mode');
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
   </head>
   <body>
     <main class="container">
       <header>
         <h1>Einstellungen</h1>
         <p class="meta-links">
-          <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
-          <span aria-hidden="true">·</span>
-          <form action="{{ url_for('logout') }}" method="post" style="display:inline">
-            <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
-          </form>
+          <span>
+            <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+            <span aria-hidden="true">·</span>
+            <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+              <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
+            </form>
+          </span>
+          <button id="theme-toggle-btn" type="button" aria-label="Design-Modus umschalten">🌙</button>
         </p>
         {% with messages = get_flashed_messages() %}
           {% if messages %}
@@ -63,6 +76,33 @@
             <label>Fallback-Ordnername</label>
             <input type="text" name="fallback_folder" value="{{ settings.fallback_folder }}" />
             <p class="muted">Verwendet, wenn Kriterien nicht erfüllt sind.</p>
+          </div>
+
+          <hr style="margin: 2rem 0;">
+
+          <h3>📥 Eingang verarbeiten</h3>
+
+          <div class="form-row">
+            <label>Eingangsordner (PDFs)</label>
+            <input
+              type="text"
+              name="inbox_dir"
+              value="{{ settings.inbox_dir }}"
+              placeholder="{{ settings.inbox_dir }}"
+            />
+            <p class="muted">Wird vom Button „Eingang verarbeiten“ genutzt. Pfad kann absolut oder relativ zum Repo sein.</p>
+          </div>
+
+          <div class="form-row">
+            <label>Auto-Intervall (Minuten)</label>
+            <input
+              type="number"
+              name="inbox_interval_minutes"
+              min="0"
+              step="1"
+              value="{{ settings.inbox_interval_minutes or 0 }}"
+            />
+            <p class="muted">0 = deaktiviert. Wenn aktiviert, wird der Eingangsordner regelmäßig automatisch verarbeitet.</p>
           </div>
 
           <hr style="margin: 2rem 0;">

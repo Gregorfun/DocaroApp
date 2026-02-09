@@ -85,6 +85,7 @@ from core.runtime_state import RuntimeStateConfig, reset_runtime_state, reset_ru
 from services.web_auth import install_auth
 from core.performance import profile
 from functools import lru_cache
+import string
 
 config = Config()
 DATA_DIR = config.DATA_DIR
@@ -211,6 +212,8 @@ def _default_auto_sort_settings() -> AutoSortSettings:
         mode=config.AUTO_SORT_MODE_DEFAULT,
         confidence_threshold=config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT,
         fallback_folder=config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT,
+        inbox_dir=config.INBOX_DIR,
+        inbox_interval_minutes=0,
     )
 
 
@@ -225,6 +228,70 @@ def _get_auto_sort_settings(refresh: bool = False) -> AutoSortSettings:
             pass
         AUTO_SORT_SETTINGS.base_dir = base_dir_path
     return AUTO_SORT_SETTINGS
+
+
+def _looks_like_windows_drive_path(value: str) -> bool:
+    raw = (value or "").strip()
+    # e.g. C:\Users\... or C:/Users/...
+    return (
+        len(raw) >= 3
+        and raw[0] in string.ascii_letters
+        and raw[1] == ":"
+        and (raw[2] == "\\" or raw[2] == "/")
+    )
+
+
+def _windows_path_not_supported_on_linux_message(path_value: str) -> str:
+    return (
+        "Windows-Lokaler Pfad ist auf diesem Linux-Server nicht lesbar: "
+        f"{path_value}. "
+        "Bitte den Ordner als Netzwerkfreigabe (SMB/CIFS) mounten und dann den Linux-Mountpfad "
+        "(z.B. /mnt/lieferscheine) in den Einstellungen eintragen."
+    )
+
+
+def _resolve_inbox_dir(inbox_dir: Path) -> Path:
+    """Resolve inbox dir for filesystem access.
+
+    - Absolute POSIX paths are used as-is (resolved best-effort).
+    - Relative paths are interpreted relative to repo BASE_DIR.
+    - Windows-style paths (e.g. C:\\Users\\...) are treated as *relative strings*
+      and therefore mapped under BASE_DIR on Linux.
+    """
+    raw = str(inbox_dir or "").strip()
+    if not raw:
+        return config.INBOX_DIR
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        try:
+            return p.resolve()
+        except OSError:
+            return p
+    try:
+        return (BASE_DIR / p).resolve()
+    except OSError:
+        return BASE_DIR / p
+
+
+def _display_inbox_dir(inbox_dir: Path) -> str:
+    """Human-friendly display for inbox dir.
+
+    If a legacy value was persisted as BASE_DIR + Windows-path-string,
+    show only the Windows portion.
+    """
+    raw = str(inbox_dir or "").strip()
+    if not raw:
+        return ""
+    base_prefix = str(BASE_DIR).rstrip("/") + "/"
+    if raw.startswith(base_prefix):
+        rest = raw[len(base_prefix):]
+        if _looks_like_windows_drive_path(rest):
+            return rest
+        try:
+            return str(Path(raw).relative_to(BASE_DIR))
+        except Exception:
+            return raw
+    return raw
 
 
 def _save_auto_sort_settings(settings: AutoSortSettings) -> None:
@@ -499,6 +566,10 @@ def index():
     filtered = _filter_results(results, incomplete_only) if results else results
     processing = _is_processing()
     progress = _load_progress()
+
+    settings = _get_auto_sort_settings()
+    inbox_dir_value = getattr(settings, "inbox_dir", INBOX_DIR)
+    inbox_dir_display = _display_inbox_dir(inbox_dir_value)
     return render_template(
         "index.html",
         results=filtered,
@@ -508,6 +579,7 @@ def index():
         edit_all=edit_all,
         processing=processing,
         progress=progress,
+        inbox_dir_display=inbox_dir_display,
     )
 
 
@@ -561,6 +633,20 @@ def settings_save():
     fallback_folder = form.get("fallback_folder", config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT).strip() or config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT
     fallback_folder = sanitize_supplier_name(fallback_folder)
 
+    inbox_dir_raw = form.get("inbox_dir", "").strip() or str(config.INBOX_DIR)
+    # Persist exactly what the user entered (no automatic BASE_DIR prefixing).
+    inbox_dir = Path(inbox_dir_raw).expanduser()
+    if os.name != "nt" and _looks_like_windows_drive_path(inbox_dir_raw):
+        flash(_windows_path_not_supported_on_linux_message(inbox_dir_raw))
+
+    inbox_interval_raw = (form.get("inbox_interval_minutes", "0") or "0").strip()
+    try:
+        inbox_interval_minutes = int(inbox_interval_raw)
+    except ValueError:
+        inbox_interval_minutes = 0
+    if inbox_interval_minutes < 0:
+        inbox_interval_minutes = 0
+
     settings = AutoSortSettings(
         enabled=enabled,
         base_dir=base_dir,
@@ -568,6 +654,8 @@ def settings_save():
         mode=mode,
         confidence_threshold=confidence_threshold,
         fallback_folder=fallback_folder,
+        inbox_dir=inbox_dir,
+        inbox_interval_minutes=inbox_interval_minutes,
     )
     _save_auto_sort_settings(settings)
     
@@ -1052,14 +1140,21 @@ def process_inbox():
             flash("Es läuft bereits eine Verarbeitung.")
             return redirect(url_for("index"))
 
-        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        settings = _get_auto_sort_settings()
+        inbox_dir_raw = getattr(settings, "inbox_dir", INBOX_DIR)
+        inbox_dir_raw_str = str(inbox_dir_raw)
+        if os.name != "nt" and _looks_like_windows_drive_path(inbox_dir_raw_str):
+            flash(_windows_path_not_supported_on_linux_message(inbox_dir_raw_str))
+            return redirect(url_for("index"))
+        inbox_dir = _resolve_inbox_dir(inbox_dir_raw)
+        inbox_dir.mkdir(parents=True, exist_ok=True)
         pdfs = sorted(
             p
-            for p in INBOX_DIR.iterdir()
+            for p in inbox_dir.iterdir()
             if p.is_file() and p.suffix.lower() == ".pdf"
         )
         if not pdfs:
-            flash("Keine PDFs in data/eingang gefunden.")
+            flash(f"Keine PDFs in {inbox_dir} gefunden.")
             return redirect(url_for("index"))
 
         date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
@@ -1068,7 +1163,7 @@ def process_inbox():
         _set_processing(True)
         q.enqueue(
             background_process_folder,
-            args=(INBOX_DIR, date_fmt),
+            args=(inbox_dir, date_fmt),
             kwargs={"cleanup_input_dir": False, "log_context": "inbox:bg_worker"},
             job_timeout='1h',
             result_ttl=86400
@@ -1076,6 +1171,7 @@ def process_inbox():
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("inbox:handler", exc)
+        _set_processing(False)
         raise
 
 
@@ -1955,12 +2051,28 @@ def _apply_supplier_corrections(results):
     corrections = _load_supplier_corrections()
     if not corrections:
         return results
+
+    def _is_never_supplier_name(value: str) -> bool:
+        low = (value or "").strip().lower()
+        low = low.replace("\u00df", "ss").replace("\u00e4", "ae").replace("\u00f6", "oe").replace("\u00fc", "ue")
+        # Franz Bracht ist immer Empfänger/Lieferadresse, niemals Supplier
+        blacklist = (
+            "franz bracht",
+            "kran-vermietung",
+            "kran vermietung",
+            "bruchfeld 91",
+            "47809 krefeld",
+        )
+        return any(b in low for b in blacklist)
+
     changed = False
     for item in results:
         file_id = item.get("file_id")
         if not file_id:
             continue
         corrected = corrections.get(file_id)
+        if corrected and _is_never_supplier_name(str(corrected)):
+            continue
         if corrected and item.get("supplier") != corrected:
             item["supplier"] = corrected
             item["supplier_source"] = "manual"
@@ -2012,7 +2124,19 @@ def _move_pdf_to_dir(pdf_path: Path, target_dir: Path, filename: str) -> Tuple[O
         target_path = direct_target
         if target_path.exists():
             target_path = get_unique_path(target_dir, filename)
-        pdf_path.replace(target_path)
+        try:
+            pdf_path.replace(target_path)
+        except OSError as exc:
+            # Cross-device move (EXDEV): rename/replace fails across mounts.
+            if getattr(exc, "errno", None) == 18:  # EXDEV
+                shutil.copy2(pdf_path, target_path)
+                try:
+                    pdf_path.unlink(missing_ok=True)
+                except TypeError:
+                    if pdf_path.exists():
+                        pdf_path.unlink()
+            else:
+                raise
         return target_path, ""
     except OSError as exc:
         return None, str(exc)

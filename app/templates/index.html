@@ -4,22 +4,35 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docaro OCR-Renamer</title>
+    <script>
+      // Theme sofort setzen um Flash zu verhindern
+      (function() {
+        const isDarkMode = localStorage.getItem('docaro-dark-mode');
+        if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark-mode');
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
   </head>
   <body data-edit-all="{% if edit_all %}1{% else %}0{% endif %}" data-results-count="{{ results|length if results else 0 }}">
     <main class="container">
       <header>
         <h1>Docaro OCR-Renamer</h1>
         <p>PDFs hochladen, OCR auslesen, umbenennen und herunterladen.</p>
-        <p class="meta-links">
-          <a href="{{ url_for('suppliers') }}">Lieferanten verwalten</a>
-          <span aria-hidden="true">·</span>
-          <a href="{{ url_for('settings_page') }}">Einstellungen</a>
-          <span aria-hidden="true">·</span>
-          <form action="{{ url_for('logout') }}" method="post" style="display:inline">
-            <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
-          </form>
-        </p>
+        <div class="meta-links">
+          <span class="meta-links-right">
+            <a href="{{ url_for('suppliers') }}">Lieferanten verwalten</a>
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('settings_page') }}">Einstellungen</a>
+            <span aria-hidden="true">·</span>
+            <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+              <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
+            </form>
+          </span>
+          <button id="theme-toggle-btn" type="button" aria-label="Design-Modus umschalten">🌙</button>
+        </div>
         {% if reset_done %}
           <p class="notice">Downloads wurden zurückgesetzt.</p>
         {% endif %}
@@ -70,7 +83,7 @@
 
         <form action="{{ url_for('process_inbox') }}" method="post" class="inline-form" style="margin-top: 0.75rem;">
           <input type="hidden" name="date_fmt" value="%d-%m-%Y" data-role="batch-date-format" />
-          <button type="submit" class="ghost">Eingang verarbeiten (data/eingang)</button>
+          <button type="submit" class="ghost">Eingang verarbeiten ({{ inbox_dir_display }})</button>
         </form>
       </section>
 

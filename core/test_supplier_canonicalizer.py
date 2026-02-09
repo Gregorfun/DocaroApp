@@ -83,7 +83,7 @@ class TestSupplierCanonicalizer(unittest.TestCase):
             with self.subTest(variant=variant):
                 result = self.canonicalizer.canonicalize_supplier(variant)
                 self.assertIsNotNone(result, f"No match for {variant}")
-                self.assertEqual(result.canonical_name, "Ortojohann+Kraft", f"Wrong canonical for {variant}")
+                self.assertEqual(result.canonical_name, "Orjohann Kraft", f"Wrong canonical for {variant}")
     
     def test_pirtek_case_insensitive(self):
         """Test: PIRTEK, Pirtek, pirtek -> PIRTEK."""
