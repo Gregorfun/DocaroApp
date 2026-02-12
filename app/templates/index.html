@@ -299,7 +299,7 @@
                         <span class="detail-label">PDF-Vorschau:</span>
                         {% if item.file_id %}
                           <div class="pdf-thumbnail-container">
-                            <img src="{{ url_for('pdf_thumbnail', file_id=item.file_id) }}" alt="PDF-Vorschau" class="pdf-thumbnail" loading="lazy" />
+                            <img src="{{ url_for('pdf_thumbnail', file_id=item.file_id, size='sm') }}" alt="PDF-Vorschau" class="pdf-thumbnail" loading="lazy" />
                           </div>
                         {% else %}
                           <span class="muted">Keine Vorschau verfügbar</span>
@@ -506,7 +506,20 @@
         // PDF-Thumbnail: Klick zum Vergrößern/Verkleinern (ohne Modal)
         document.querySelectorAll(".pdf-thumbnail-container").forEach((container) => {
           container.addEventListener("click", () => {
-            container.classList.toggle("is-zoomed");
+            const nextZoomed = !container.classList.contains("is-zoomed");
+            container.classList.toggle("is-zoomed", nextZoomed);
+
+            const img = container.querySelector("img.pdf-thumbnail");
+            if (!img) {
+              return;
+            }
+            try {
+              const u = new URL(img.getAttribute("src") || "", window.location.href);
+              u.searchParams.set("size", nextZoomed ? "lg" : "sm");
+              img.setAttribute("src", u.toString());
+            } catch (_) {
+              // ignore
+            }
           });
         });
 

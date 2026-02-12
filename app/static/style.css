@@ -735,7 +735,7 @@ html.dark-mode .pdf-thumbnail-container {
 }
 
 .pdf-thumbnail-container.is-zoomed .pdf-thumbnail {
-  max-height: 75vh;
+  max-height: 90vh;
 }
 
 .debug-details summary {

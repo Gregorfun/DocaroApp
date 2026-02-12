@@ -3489,13 +3489,18 @@ def pdf_thumbnail(file_id: str):
     if not pdf_path or not pdf_path.exists():
         abort(404)
 
+    size = (request.args.get("size", "sm") or "sm").strip().lower()
+    if size not in {"sm", "lg"}:
+        size = "sm"
+
     try:
         from pdf2image import convert_from_path
         from io import BytesIO
         
-        # Rendere nur die erste Seite mit niedriger DPI für schnelle Thumbnail-Erzeugung
+        # Rendere nur die erste Seite. Für Zoom kann eine höhere DPI gewählt werden.
+        dpi = 100 if size == "sm" else 200
         try:
-            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=100)
+            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=dpi)
             if not images:
                 abort(500)
         except Exception as e:
@@ -3504,8 +3509,13 @@ def pdf_thumbnail(file_id: str):
 
         # Konvertiere PIL Image zu JPEG
         buffer = BytesIO()
-        images[0].thumbnail((300, 400))  # Max 300x400px für Thumbnail
-        images[0].save(buffer, format="JPEG", quality=75)
+        if size == "sm":
+            images[0].thumbnail((300, 400))  # schnell, klein
+            quality = 75
+        else:
+            images[0].thumbnail((900, 1200))  # größer & schärfer beim Zoom
+            quality = 88
+        images[0].save(buffer, format="JPEG", quality=quality)
         buffer.seek(0)
 
         return send_file(buffer, mimetype="image/jpeg", as_attachment=False)
