@@ -2998,6 +2998,70 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     result["out_name"] = target_path.name
     result["status"] = "ok"
+
+    # Audit log for training / explainability (best-effort).
+    # This enables the retrain scheduler to learn from online corrections.
+    try:
+        from core.audit_logger import AuditLogger
+
+        audit_logger = AuditLogger(config.DATA_DIR / "audit.jsonl")
+
+        def _safe_float(value: object) -> float:
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        needs_review = bool(
+            (not date_obj)
+            or (supplier_canonical in ("", "Unbekannt"))
+            or (supplier_source in ("heuristic", "none"))
+        )
+        review_reason = "" if not needs_review else "missing_or_low_confidence"
+
+        extractions = {
+            "supplier": audit_logger.log_extraction(
+                document_path=target_path,
+                field_name="supplier",
+                value=supplier_canonical,
+                confidence=_safe_float(result.get("supplier_confidence")),
+                page=1,
+                text_snippet=str(result.get("supplier_guess_line") or result.get("supplier_raw") or "")[:500],
+                reasons=[str(result.get("supplier_source") or "")],
+            ),
+            "date": audit_logger.log_extraction(
+                document_path=target_path,
+                field_name="date",
+                value=result.get("date") or "",
+                confidence=_safe_float(result.get("date_confidence")),
+                page=1,
+                text_snippet=str(result.get("date_evidence") or "")[:500],
+                reasons=[str(result.get("date_source") or "")],
+            ),
+            "doctype": audit_logger.log_extraction(
+                document_path=target_path,
+                field_name="doctype",
+                value=result.get("doc_type") or "",
+                confidence=_safe_float(result.get("doc_type_confidence")),
+                page=1,
+                text_snippet=str(result.get("doc_type_evidence") or "")[:500],
+                reasons=["classifier"],
+            ),
+        }
+
+        audit_entry = audit_logger.create_audit_entry(
+            document_path=target_path,
+            extractions=extractions,
+            status="success",
+            ocr_method="textlayer" if textlayer_text.strip() else "ocr",
+            processing_time=0.0,
+            needs_review=needs_review,
+            review_reason=review_reason,
+        )
+        audit_logger.save_audit_entry(audit_entry)
+    except Exception:
+        pass
+
     _debug_extract_log(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),

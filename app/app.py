@@ -172,6 +172,99 @@ _session_cache = {"data": None, "mtime": 0}
 _supplier_canonicalizer = None
 
 
+@lru_cache(maxsize=1)
+def _get_audit_logger():
+    from core.audit_logger import AuditLogger
+
+    return AuditLogger(DATA_DIR / "audit.jsonl")
+
+
+def _ensure_audit_entry_for_current_result(file_id: str, pdf_path: Path) -> None:
+    """Best-effort: stellt sicher, dass ein Basis-AuditEntry für das Dokument existiert.
+
+    Hintergrund: Viele Bestandsdokumente wurden verarbeitet, bevor Audit-Logging aktiv war.
+    Damit Online-Korrekturen trotzdem als Trainingsdaten landen, legen wir bei Bedarf
+    einen Basis-Entry aus dem aktuellen Result an.
+    """
+
+    try:
+        if not pdf_path or not pdf_path.exists():
+            return
+        result = _result_for_file_id(file_id) or {}
+        audit_logger = _get_audit_logger()
+
+        # Schnell checken, ob es bereits Einträge gibt.
+        existing = audit_logger.load_audit_entries(document_path=str(pdf_path), limit=1)
+        if existing:
+            return
+
+        def _safe_float(value: object) -> float:
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        extractions = {
+            "supplier": audit_logger.log_extraction(
+                document_path=pdf_path,
+                field_name="supplier",
+                value=str(result.get("supplier") or ""),
+                confidence=_safe_float(result.get("supplier_confidence")),
+                page=1,
+                text_snippet=str(result.get("supplier_guess_line") or result.get("supplier_raw") or "")[:500],
+                reasons=[str(result.get("supplier_source") or "")],
+            ),
+            "date": audit_logger.log_extraction(
+                document_path=pdf_path,
+                field_name="date",
+                value=str(result.get("date") or ""),
+                confidence=_safe_float(result.get("date_confidence")),
+                page=1,
+                text_snippet=str(result.get("date_evidence") or "")[:500],
+                reasons=[str(result.get("date_source") or "")],
+            ),
+            "doctype": audit_logger.log_extraction(
+                document_path=pdf_path,
+                field_name="doctype",
+                value=str(result.get("doc_type") or ""),
+                confidence=_safe_float(result.get("doc_type_confidence")),
+                page=1,
+                text_snippet=str(result.get("doc_type_evidence") or "")[:500],
+                reasons=[str(result.get("doc_type_evidence") or "")],
+            ),
+        }
+
+        entry = audit_logger.create_audit_entry(
+            document_path=pdf_path,
+            extractions=extractions,
+            status="success",
+            ocr_method=None,
+            processing_time=0.0,
+            needs_review=bool(result.get("needs_review")),
+            review_reason=",".join(result.get("review_reasons") or []) if isinstance(result.get("review_reasons"), list) else None,
+        )
+        audit_logger.save_audit_entry(entry)
+    except Exception:
+        return
+
+
+def _append_audit_correction(file_id: str, field_name: str, corrected_value: str) -> None:
+    try:
+        pdf_path = _resolve_file_path(file_id)
+        if not pdf_path:
+            return
+        _ensure_audit_entry_for_current_result(file_id, pdf_path)
+        audit_logger = _get_audit_logger()
+        audit_logger.add_correction(
+            document_path=str(pdf_path),
+            field_name=field_name,
+            corrected_value=corrected_value,
+            reviewed_by="web",
+        )
+    except Exception:
+        return
+
+
 def get_supplier_canonicalizer():
     """Lazy-load Supplier Canonicalizer (nur einmal instanziieren)."""
     global _supplier_canonicalizer
@@ -1721,6 +1814,9 @@ def confirm_supplier():
                 _auto_sort_pdf(current, pdf_path)
         except Exception as exc:
             logger.warning(f"Auto-sort after confirm_supplier failed: {exc}")
+
+        # Online-Training: Korrektur ins Audit-Log schreiben (best-effort)
+        _append_audit_correction(file_id, "supplier", supplier_name)
         corrections = _load_supplier_corrections()
         corrections[file_id] = supplier_name
         _save_supplier_corrections(corrections)
@@ -2572,6 +2668,9 @@ def confirm_date():
             _auto_sort_pdf(current, target_path)
     except Exception as exc:
         logger.warning(f"Auto-sort after confirm_date failed: {exc}")
+
+    # Online-Training: Datumskorrektur loggen
+    _append_audit_correction(file_id, "date", date_iso)
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -2682,6 +2781,9 @@ def confirm_doc_type():
                 _auto_sort_pdf(current, pdf_path)
     except Exception as exc:
         logger.warning(f"Post-save sync after confirm_doc_type failed: {exc}")
+
+    # Online-Training: DocType-Korrektur loggen
+    _append_audit_correction(file_id, "doctype", raw_val)
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -3188,6 +3290,14 @@ def confirm_all_from_view():
             _auto_sort_pdf(current, target_path)
     except Exception as exc:
         logger.warning(f"Auto-sort after confirm_all_from_view failed: {exc}")
+
+    # Online-Training: alle Korrekturen (best-effort) ins Audit-Log
+    if supplier_name:
+        _append_audit_correction(file_id, "supplier", supplier_name)
+    if date_iso:
+        _append_audit_correction(file_id, "date", date_iso)
+    if raw_doc_type:
+        _append_audit_correction(file_id, "doctype", raw_doc_type)
 
     _append_history(
         {

@@ -4,11 +4,14 @@ Automatischer Retrain-Scheduler für Docaro ML-Modelle.
 
 import json
 import logging
+import os
+import socket
 import subprocess
 import sys
 from datetime import datetime, time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +57,56 @@ class RetrainScheduler:
         self.min_corrections = min_corrections
         self.schedule_time = schedule_time
         self.last_train_date: Optional[datetime] = None
+
+    def _effective_mlflow_tracking_uri(self) -> str:
+        """Ermittelt eine funktionierende MLflow Tracking URI.
+
+        Priorität:
+        1) Env `DOCARO_MLFLOW_TRACKING_URI` / `MLFLOW_TRACKING_URI`
+        2) `self.mlflow_tracking_uri`
+
+        Falls eine http(s)-URI nicht erreichbar ist, wird auf lokalen File-Store
+        unter `<DATA_DIR>/mlflow` ausgewichen.
+        """
+
+        env_uri = os.getenv("DOCARO_MLFLOW_TRACKING_URI") or os.getenv("MLFLOW_TRACKING_URI")
+        candidate = (env_uri or self.mlflow_tracking_uri or "").strip()
+
+        if not candidate:
+            fallback_dir = (self.audit_log_path.parent / "mlflow")
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return f"file:{fallback_dir}"
+
+        parsed = urlparse(candidate)
+
+        if parsed.scheme in ("http", "https"):
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if not host:
+                _LOGGER.warning(f"Ungültige MLflow Tracking URI: {candidate}. Nutze lokalen File-Store.")
+            else:
+                try:
+                    with socket.create_connection((host, port), timeout=1.0):
+                        return candidate
+                except OSError:
+                    _LOGGER.warning(
+                        f"MLflow Tracking Server nicht erreichbar ({candidate}). Nutze lokalen File-Store."
+                    )
+
+            fallback_dir = (self.audit_log_path.parent / "mlflow")
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return f"file:{fallback_dir}"
+
+        if parsed.scheme == "file":
+            local_path = Path(unquote(parsed.path))
+            try:
+                local_path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                _LOGGER.warning(f"Konnte MLflow File-Store Verzeichnis nicht anlegen ({local_path}): {e}")
+            return candidate
+
+        # Andere Schemes (z.B. sqlite) unverändert nutzen
+        return candidate
     
     def collect_training_data(self) -> dict:
         """
@@ -168,73 +221,78 @@ class RetrainScheduler:
         _LOGGER.info(f"Training Supplier-Modell mit {len(training_data)} Samples...")
         
         try:
-            import mlflow
             from sklearn.feature_extraction.text import TfidfVectorizer
             from sklearn.linear_model import LogisticRegression
-            from sklearn.pipeline import Pipeline
             from sklearn.model_selection import train_test_split
+            from sklearn.pipeline import Pipeline
             import joblib
-            
-            mlflow.set_tracking_uri(self.mlflow_tracking_uri)
+        except ImportError as e:
+            _LOGGER.error(f"Missing dependencies for ML training: {e}")
+            return
+
+        # Prepare training data
+        texts: list[str] = []
+        labels: list[str] = []
+        for item in training_data:
+            text = item.get("ocr_text", "")
+            label = item.get("corrected_value", "")
+            if text and label:
+                texts.append(text[:1000])  # First 1000 chars
+                labels.append(label)
+
+        if len(texts) < 5:
+            _LOGGER.warning(f"Zu wenige valide Samples: {len(texts)}")
+            return
+
+        # Train model (unabhängig von MLflow)
+        model = Pipeline([
+            ("tfidf", TfidfVectorizer(max_features=500, ngram_range=(1, 2))),
+            ("clf", LogisticRegression(max_iter=1000, random_state=42)),
+        ])
+
+        if len(texts) >= 10:
+            X_train, X_test, y_train, y_test = train_test_split(
+                texts, labels, test_size=0.2, random_state=42
+            )
+            model.fit(X_train, y_train)
+            accuracy = float(model.score(X_test, y_test))
+        else:
+            model.fit(texts, labels)
+            accuracy = 0.0  # No test set
+
+        # Save model locally (immer)
+        model_path = Path(self.audit_log_path).parent / "ml" / "supplier_model.pkl"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model, model_path)
+        _LOGGER.info(f"Modell gespeichert: {model_path}")
+
+        # MLflow logging (best-effort)
+        try:
+            import mlflow
+
+            effective_uri = self._effective_mlflow_tracking_uri()
+            if effective_uri:
+                mlflow.set_tracking_uri(effective_uri)
             mlflow.set_experiment(self.experiment_name)
-            
-            # Prepare training data
-            texts = []
-            labels = []
-            for item in training_data:
-                text = item.get("ocr_text", "")
-                label = item.get("corrected_value", "")
-                if text and label:
-                    texts.append(text[:1000])  # First 1000 chars
-                    labels.append(label)
-            
-            if len(texts) < 5:
-                _LOGGER.warning(f"Zu wenige valide Samples: {len(texts)}")
-                return
-            
+
             with mlflow.start_run(run_name=f"supplier_training_{datetime.now():%Y%m%d_%H%M%S}"):
-                # Simple TF-IDF + Logistic Regression pipeline
-                model = Pipeline([
-                    ('tfidf', TfidfVectorizer(max_features=500, ngram_range=(1, 2))),
-                    ('clf', LogisticRegression(max_iter=1000, random_state=42))
-                ])
-                
-                # Train/test split if enough data
-                if len(texts) >= 10:
-                    X_train, X_test, y_train, y_test = train_test_split(
-                        texts, labels, test_size=0.2, random_state=42
-                    )
-                    model.fit(X_train, y_train)
-                    accuracy = model.score(X_test, y_test)
-                else:
-                    model.fit(texts, labels)
-                    accuracy = 0.0  # No test set
-                
-                # Log to MLflow
                 mlflow.log_param("n_samples", len(texts))
                 mlflow.log_param("model_type", "tfidf_logreg")
                 mlflow.log_param("max_features", 500)
                 if accuracy > 0:
                     mlflow.log_metric("test_accuracy", accuracy)
-                
-                # Save model locally (skip MLflow artifact upload for now)
-                model_path = Path(self.audit_log_path).parent / "ml" / "supplier_model.pkl"
-                model_path.parent.mkdir(parents=True, exist_ok=True)
-                joblib.dump(model, model_path)
-                _LOGGER.info(f"Modell gespeichert: {model_path}")
-                
-                # Try to log artifact, but don't fail if permissions issue
+
                 try:
                     mlflow.log_artifact(str(model_path))
                 except Exception as artifact_err:
                     _LOGGER.warning(f"Artifact upload fehlgeschlagen (nicht kritisch): {artifact_err}")
-                
-                _LOGGER.info(f"Supplier-Modell trainiert (Acc: {accuracy:.3f}) und gespeichert")
-        
-        except ImportError as e:
-            _LOGGER.error(f"Missing dependencies for ML training: {e}")
+
+        except ImportError:
+            _LOGGER.info("MLflow nicht installiert – überspringe MLflow-Logging")
         except Exception as e:
-            _LOGGER.error(f"Fehler beim Supplier-Training: {e}", exc_info=True)
+            _LOGGER.warning(f"MLflow-Logging fehlgeschlagen (nicht kritisch): {e}")
+
+        _LOGGER.info(f"Supplier-Modell trainiert (Acc: {accuracy:.3f}) und gespeichert")
     
     def run_training_job(self):
         """Führt kompletten Training-Job aus."""

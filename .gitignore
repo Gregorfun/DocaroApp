@@ -22,6 +22,8 @@ data/uploads/
 data/quarantaene/
 data/logs/
 data/ml/
+data/mlflow/
+data/audit.jsonl
 data/arbeitsordner/
 data/session_files.json
 data/settings.json
