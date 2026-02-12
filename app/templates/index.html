@@ -503,6 +503,13 @@
           });
         });
 
+        // PDF-Thumbnail: Klick zum Vergrößern/Verkleinern (ohne Modal)
+        document.querySelectorAll(".pdf-thumbnail-container").forEach((container) => {
+          container.addEventListener("click", () => {
+            container.classList.toggle("is-zoomed");
+          });
+        });
+
         const statusLabel = (payload) => {
           if (payload.date_missing || payload.supplier_missing) {
             return { text: "unvollständig", cls: "status-unvollstaendig" };
