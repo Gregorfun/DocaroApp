@@ -81,7 +81,7 @@ const UploadMessages = {
   getStats() {
     const template = this.getRandom(this.statsTemplates);
     const stats = this.currentStats;
-    
+
     return template
       .replace('{count}', stats.weekCount || Math.floor(Math.random() * 500) + 100)
       .replace('{time}', stats.avgTime.toFixed(1))
@@ -96,7 +96,7 @@ const UploadMessages = {
   getRandomMessage() {
     const types = ['fact', 'motivational', 'joke', 'stats'];
     const type = types[Math.floor(Math.random() * types.length)];
-    
+
     switch(type) {
       case 'fact':
         return this.getRandom(this.facts);
@@ -159,6 +159,7 @@ class ProgressDisplay {
     this.progressEl = null;
     this.messageInterval = null;
     this.animationInterval = null;
+    this.statusInterval = null;
     this.animationFrame = 0;
 
     this.init();
@@ -189,13 +190,18 @@ class ProgressDisplay {
     // Starte Message Loop
     this.updateMessage();
     this.messageInterval = setInterval(() => this.updateMessage(), 4000);
-      UploadMessages.fetchStats();
-      setInterval(() => UploadMessages.fetchStats(), 15000);
+    UploadMessages.fetchStats();
+    setInterval(() => UploadMessages.fetchStats(), 15000);
+
+    // Pollt den Verarbeitungsstatus ohne Voll-Reload/Flicker.
+    this.pollStatus();
+    this.statusInterval = setInterval(() => this.pollStatus(), 2000);
   }
 
   stop() {
     if (this.messageInterval) clearInterval(this.messageInterval);
     if (this.animationInterval) clearInterval(this.animationInterval);
+    if (this.statusInterval) clearInterval(this.statusInterval);
   }
 
   updateAnimation() {
@@ -216,7 +222,7 @@ class ProgressDisplay {
 
   updateProgress(done, total) {
     if (!this.progressEl) return;
-    
+
     if (total > 0) {
       const percent = Math.round((done / total) * 100);
       const currentFile = (window.docaroProgress && window.docaroProgress.current_file) ? window.docaroProgress.current_file : "";
@@ -229,6 +235,40 @@ class ProgressDisplay {
       this.progressEl.innerHTML = '<progress></progress>';
     }
   }
+
+  async pollStatus() {
+    try {
+      const response = await fetch('/status.json', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('application/json')) {
+        return;
+      }
+      const payload = await response.json();
+      if (!payload || payload.ok !== true) {
+        return;
+      }
+
+      const progress = payload.progress || {};
+      const done = Number(progress.done || 0);
+      const total = Number(progress.total || 0);
+      const currentFile = String(progress.current_file || '');
+      window.docaroProgress = { done, total, current_file: currentFile };
+      if (total > 0) {
+        this.updateProgress(done, total);
+      }
+
+      // Wenn der Job fertig ist, einmalig reloaden um Ergebnisliste/Downloads zu zeigen.
+      if (!payload.processing) {
+        this.stop();
+        window.location.reload();
+      }
+    } catch (_) {
+      // Netzwerk-/Auth-Fehler temporär ignorieren, nächster Poll versucht erneut.
+    }
+  }
 }
 
 // Auto-Init wenn Verarbeitung läuft
@@ -239,7 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
     UploadMessages.fetchStats().then(() => {
       const display = new ProgressDisplay('progress-enhanced');
       display.start();
-      
+
       // Extrahiere Progress-Werte aus dem Template-Kontext
       const progressData = window.docaroProgress || {};
       if (progressData.total > 0) {

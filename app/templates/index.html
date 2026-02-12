@@ -41,7 +41,7 @@
             <strong>🔄 Verarbeitung läuft …</strong>
             <div id="progress-enhanced"></div>
             <p style="margin-top: 8px; font-size: 0.9rem; color: var(--muted);">
-              Seite aktualisiert sich automatisch.
+              Status wird live aktualisiert.
             </p>
           </div>
           <script>
@@ -51,7 +51,6 @@
               current_file: {{ (progress.get('current_file', '') if progress else '')|tojson }}
             };
           </script>
-          <meta http-equiv="refresh" content="3">
           <script src="{{ url_for('static', filename='upload-messages.js') }}"></script>
         {% endif %}
         {% with messages = get_flashed_messages() %}
@@ -124,7 +123,7 @@
               {% else %}
                 {% set row_state = "fertig" %}
               {% endif %}
-              
+
               <div class="result-card">
                 <div class="result-content">
                   <div class="result-row">
@@ -141,7 +140,7 @@
                       </div>
                     </div>
                   </div>
-                  
+
                   <div class="result-row">
                     <div class="result-info-field">
                       <span class="field-label-inline">Lieferant:</span>
@@ -169,7 +168,7 @@
                       </details>
                     </div>
                   </div>
-                  
+
                   <div class="result-row">
                     <div class="result-info-field">
                       <span class="field-label-inline">Datum:</span>
@@ -194,7 +193,7 @@
                       </details>
                     </div>
                   </div>
-                  
+
                   <div class="result-row">
                     <div class="result-info-field">
                       <span class="field-label-inline">Dokumentnummer:</span>
@@ -215,14 +214,14 @@
                       </details>
                     </div>
                   </div>
-                  
+
                   <div class="result-row">
                     <div class="result-info-field">
                       <span class="field-label-inline">Dokumenttyp:</span>
                       <span class="field-value" data-field="doc_type">
                         {% if item.doc_type %}
                           {% set doc_conf = item.doc_type_confidence|float if item.doc_type_confidence else 0 %}
-                          <span class="badge badge-{{ item.doc_type|lower }}" 
+                          <span class="badge badge-{{ item.doc_type|lower }}"
                                 title="Confidence: {{ '%.2f'|format(doc_conf) }}{% if item.doc_type_evidence %}, Keywords: {{ item.doc_type_evidence }}{% endif %}">
                             {{ item.doc_type }}
                           </span>
@@ -252,7 +251,7 @@
                       </details>
                     </div>
                   </div>
-                  
+
                   <div class="result-row">
                     <div class="result-info-field">
                       <span class="field-label-inline">Status:</span>
@@ -291,7 +290,7 @@
                     </div>
                   </div>
                 </div>
-                  
+
                   <div class="result-details" data-detail-row="{{ item.file_id or '' }}" hidden>
                     <div class="detail-grid">
                       <!-- PDF Thumbnail Preview -->
@@ -305,7 +304,7 @@
                           <span class="muted">Keine Vorschau verfügbar</span>
                         {% endif %}
                       </div>
-                      
+
                       <div><span class="detail-label">Quelle:</span> <span data-field="supplier_source">{{ item.supplier_source or '-' }}</span></div>
                       <div><span class="detail-label">Sicherheit:</span> <span class="{% if item.supplier_confidence %}{% if conf >= 0.85 %}conf-high{% elif conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}{% endif %}" data-field="supplier_confidence">{{ item.supplier_confidence or '-' }}</span></div>
                       <div><span class="detail-label">Fehler:</span> <span data-field="error">{{ item.error or '-' }}</span></div>
