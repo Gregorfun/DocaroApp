@@ -135,7 +135,15 @@ if os.getenv("DOCARO_STATELESS", "0") == "1" and os.getenv("DOCARO_WORKER", "0")
 
 @atexit.register
 def _cleanup_runtime_state_on_exit() -> None:
-    # Best-effort Cleanup beim Shutdown (Start-Reset ist die Hauptgarantie)
+    # Best-effort Cleanup beim Shutdown.
+    # WICHTIG: RQ führt Jobs typischerweise in kurzlebigen Workhorse-Prozessen aus.
+    # Ein unbedingtes Löschen von TMP_DIR würde dadurch nach JEDEM Job u.a.
+    # last_results.json entfernen und damit die Download-Liste leeren.
+    # Deshalb nur in explizitem Stateless-Mode aufräumen – und nie im Worker.
+    if os.getenv("DOCARO_STATELESS", "0") != "1":
+        return
+    if os.getenv("DOCARO_WORKER", "0") == "1":
+        return
     try:
         reset_runtime_state(
             RuntimeStateConfig(
@@ -1224,8 +1232,8 @@ def background_process_folder(
         # IDs und Session-Mapping werden in der Index-Route gesetzt.
         results = _apply_result_flags(results)
         results = _apply_quarantine(results)
-        
-        _save_last_results(results)
+
+        _merge_last_results(results)
     except Exception as exc:
         _log_exception(log_context, exc)
     finally:
@@ -1240,8 +1248,75 @@ def background_process_folder(
 
 def _save_last_results(results) -> None:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
-    # Nur noch Datei schreiben, keine Session mehr
-    _session_results_path().write_text(json.dumps(results, indent=2), encoding="utf-8")
+    # Nur noch Datei schreiben, keine Session mehr (atomar, damit kein Partial-JSON entsteht)
+    payload = json.dumps(results, indent=2)
+    target = _session_results_path()
+    tmp_path = target.with_suffix(".json.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.replace(target)
+
+
+def _result_key(item: dict) -> str:
+    out_name = (item.get("out_name") or "").strip()
+    if out_name:
+        return f"out:{out_name}"
+    export_path = (item.get("export_path") or "").strip()
+    if export_path:
+        return f"path:{export_path}"
+    original = (item.get("original") or "").strip()
+    if original:
+        return f"orig:{original}"
+    # Fallback: should be rare, but keep deterministic-ish key
+    return f"unknown:{uuid4().hex}"
+
+
+def _merge_last_results(new_results: list[dict] | None) -> None:
+    """Merge new processing results into persisted last_results.
+
+    This keeps previously processed (and not downloaded) files in the download list,
+    even when the user uploads additional PDFs later.
+    """
+    if not new_results:
+        return
+
+    existing = _load_last_results() or []
+    existing_by_key: dict[str, dict] = {}
+    existing_order: list[str] = []
+
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        key = _result_key(item)
+        if key in existing_by_key:
+            continue
+        existing_by_key[key] = item
+        existing_order.append(key)
+
+    new_keys_in_order: list[str] = []
+    for item in new_results:
+        if not isinstance(item, dict):
+            continue
+        key = _result_key(item)
+        old = existing_by_key.get(key)
+        if old is None:
+            existing_by_key[key] = item
+            new_keys_in_order.append(key)
+            continue
+
+        merged = dict(old)
+        merged.update(item)
+
+        # Preserve stable identifiers / state across runs.
+        if old.get("file_id") and not merged.get("file_id"):
+            merged["file_id"] = old.get("file_id")
+        if old.get("downloaded_at") and not merged.get("downloaded_at"):
+            merged["downloaded_at"] = old.get("downloaded_at")
+
+        existing_by_key[key] = merged
+
+    merged_list = [existing_by_key[k] for k in existing_order if k in existing_by_key]
+    merged_list.extend(existing_by_key[k] for k in new_keys_in_order if k in existing_by_key)
+    _save_last_results(merged_list)
 
 
 def _load_last_results():

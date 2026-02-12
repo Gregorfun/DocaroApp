@@ -85,6 +85,13 @@ class DocNumberExtractor:
         """
         if not text or not text.strip():
             return DocNumberResult(None, None, "none")
+
+        # 0) Spezialfall: Prüfberichte (z.B. DEKRA) -> Kennzeichen als Dokumentnummer
+        doc_type_upper = (doc_type or "").strip().upper()
+        if (supplier_canonical == "Dekra") or (doc_type_upper in ("PRÜFBERICHT", "PRUEFBERICHT")):
+            plate = self._extract_vehicle_plate(text)
+            if plate:
+                return DocNumberResult(plate, "kennzeichen", "high")
         
         # 1) Supplier-spezifische Extraktion
         if supplier_canonical and supplier_canonical in self.supplier_mappings:
@@ -98,6 +105,94 @@ class DocNumberExtractor:
             return result
         
         return DocNumberResult(None, None, "none")
+
+    def _extract_vehicle_plate(self, text: str) -> Optional[str]:
+        """Extrahiert deutsches Kennzeichen aus Prüfberichten.
+
+        Bevorzugt Zeilen mit Kontext wie "Kennz"/"Kennzeichen".
+        """
+        lines = [ln.strip() for ln in (text or "").splitlines()]
+        if not lines:
+            return None
+
+        # Tolerantes Kennzeichen-Pattern (z.B. "SO- FB 1494", "SO-FB1494", "SO FB 1494")
+        # NOTE:
+        # - mind. 2 Ziffern, um False-Positives wie "GMB-H 2" zu vermeiden.
+        # - erfordert Trennzeichen zwischen Ort und Buchstabenblock (Leerzeichen oder Bindestrich),
+        #   damit Wörter wie "VOM 06" nicht matchen.
+        plate_re = re.compile(
+            r"\b([A-ZÄÖÜ]{1,3})(?:\s*[-–]\s*|\s+)([A-ZÄÖÜ]{1,2})\s*(\d{2,4})(?:\s*[A-Z])?\b",
+            flags=re.IGNORECASE,
+        )
+        # OCR kann Trennzeichen verschlucken (z.B. "SOFB1282")
+        plate_merged_re = re.compile(
+            r"\b([A-ZÄÖÜ]{1,3})([A-ZÄÖÜ]{1,2})(\d{2,4})(?:\s*[A-Z])?\b",
+            flags=re.IGNORECASE,
+        )
+        context_re = re.compile(r"\b(kennz|kennzeichen|amtliches\s+kennzeichen|kz\.?)[\s:]*", flags=re.IGNORECASE)
+
+        def _fmt(match: re.Match) -> str:
+            p1 = match.group(1).upper().replace("Ä", "AE").replace("Ö", "OE").replace("Ü", "UE")
+            p2 = match.group(2).upper().replace("Ä", "AE").replace("Ö", "OE").replace("Ü", "UE")
+            num = match.group(3)
+            # Normalisiere ohne Leerzeichen, damit es stabil in Dateinamen/UI ist
+            return f"{p1}-{p2}{num}"
+
+        def _is_false_positive(match: re.Match, line: str) -> bool:
+            raw = (match.group(0) or "")
+            p1 = (match.group(1) or "").upper()
+            p2 = (match.group(2) or "").upper()
+            hay = f"{line} {raw}".upper()
+
+            # Häufiges deutsches Wort aus Datumskontext: "vom 06.02.2026" -> kann als "VO-M 06" erscheinen
+            if (p1 + p2) == "VOM":
+                return True
+
+            # Häufige OCR-Fehler um "GMBH" (z.B. "GMB-H 2")
+            if "GMBH" in hay or "GMB-H" in hay or "GMB -H" in hay or "GMB - H" in hay:
+                return True
+            if p1 in {"GMB", "GMBH"}:
+                return True
+            if p2 == "H" and p1.startswith("GMB"):
+                return True
+            return False
+
+        def _scan_lines_for_plate(scan_lines: List[str], *, allow_merged: bool) -> Optional[str]:
+            for ln in scan_lines:
+                if not ln:
+                    continue
+                m = plate_re.search(ln)
+                if m and not _is_false_positive(m, ln):
+                    return _fmt(m)
+                if allow_merged:
+                    m2 = plate_merged_re.search(ln)
+                    if m2 and not _is_false_positive(m2, ln):
+                        return _fmt(m2)
+            return None
+
+        # 1) Kontext-Zeilen bevorzugen (aktuelle Zeile + ggf. nächste Zeile)
+        for idx, ln in enumerate(lines[:80]):
+            if not ln:
+                continue
+            if context_re.search(ln):
+                # In derselben Zeile nach Kennzeichen suchen
+                m = plate_re.search(ln)
+                if m and not _is_false_positive(m, ln):
+                    return _fmt(m)
+                # Oder in der Folgezeile
+                if idx + 1 < len(lines):
+                    m2 = plate_re.search(lines[idx + 1])
+                    if m2 and not _is_false_positive(m2, lines[idx + 1]):
+                        return _fmt(m2)
+
+        # 2) Globaler Fallback: im gesamten OCR-Text suchen.
+        # Bei DEKRA steht das Kennzeichen häufig im unteren Bereich (nicht zwingend in den ersten Zeilen).
+        direct = _scan_lines_for_plate(lines, allow_merged=False)
+        if direct:
+            return direct
+
+        # 3) Letzter Fallback: auch zusammengezogene OCR-Varianten akzeptieren (z.B. "SOFB1282").
+        return _scan_lines_for_plate(lines, allow_merged=True)
     
     def _extract_supplier_specific(
         self,

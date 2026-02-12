@@ -81,10 +81,12 @@
           <button type="submit">Upload &amp; Verarbeiten</button>
         </form>
 
-        <form action="{{ url_for('process_inbox') }}" method="post" class="inline-form" style="margin-top: 0.75rem;">
-          <input type="hidden" name="date_fmt" value="%d-%m-%Y" data-role="batch-date-format" />
-          <button type="submit" class="ghost">Eingang verarbeiten ({{ inbox_dir_display }})</button>
-        </form>
+        {% if inbox_dir_display and (':\\' not in inbox_dir_display) and (':/' not in inbox_dir_display) %}
+          <form action="{{ url_for('process_inbox') }}" method="post" class="inline-form" style="margin-top: 0.75rem;">
+            <input type="hidden" name="date_fmt" value="%d-%m-%Y" data-role="batch-date-format" />
+            <button type="submit" class="ghost">Eingang verarbeiten ({{ inbox_dir_display }})</button>
+          </form>
+        {% endif %}
       </section>
 
       <section class="panel">
@@ -239,6 +241,7 @@
                             <option value="LIEFERSCHEIN" {% if item.doc_type == 'LIEFERSCHEIN' %}selected{% endif %}>Lieferschein</option>
                             <option value="ÜBERNAHMESCHEIN" {% if item.doc_type == 'ÜBERNAHMESCHEIN' %}selected{% endif %}>Übernahmeschein</option>
                             <option value="KOMMISSIONIERLISTE" {% if item.doc_type == 'KOMMISSIONIERLISTE' %}selected{% endif %}>Kommissionierliste</option>
+                            <option value="PRÜFBERICHT" {% if item.doc_type == 'PRÜFBERICHT' %}selected{% endif %}>Prüfbericht</option>
                             <option value="SONSTIGES" {% if item.doc_type == 'SONSTIGES' or not item.doc_type %}selected{% endif %}>Sonstiges</option>
                           </select>
                           <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />

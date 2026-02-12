@@ -41,6 +41,8 @@
 
       <section class="panel">
         <form action="{{ url_for('settings_save') }}" method="post" class="settings-form">
+          {% set inbox_path = (settings.inbox_dir|string) if settings.inbox_dir else '' %}
+          {% set inbox_unavailable = inbox_path and (':\\' in inbox_path or ':/' in inbox_path) %}
           <div class="form-row">
             <label class="checkbox">
               <input type="checkbox" name="auto_sort_enabled" value="1" {% if settings.enabled %}checked{% endif %} />
@@ -80,20 +82,24 @@
 
           <hr style="margin: 2rem 0;">
 
-          <h3>📥 Eingang verarbeiten</h3>
+          <h3 class="{% if inbox_unavailable %}is-unavailable-text{% endif %}">📥 Eingang verarbeiten</h3>
+          {% if inbox_unavailable %}
+            <p class="muted is-unavailable-text">Nicht verfügbar (Windows-Pfad auf Linux).</p>
+          {% endif %}
 
-          <div class="form-row">
+          <div class="form-row {% if inbox_unavailable %}is-unavailable-field{% endif %}">
             <label>Eingangsordner (PDFs)</label>
             <input
               type="text"
               name="inbox_dir"
               value="{{ settings.inbox_dir }}"
               placeholder="{{ settings.inbox_dir }}"
+              {% if inbox_unavailable %}readonly aria-disabled="true"{% endif %}
             />
             <p class="muted">Wird vom Button „Eingang verarbeiten“ genutzt. Pfad kann absolut oder relativ zum Repo sein.</p>
           </div>
 
-          <div class="form-row">
+          <div class="form-row {% if inbox_unavailable %}is-unavailable-field{% endif %}">
             <label>Auto-Intervall (Minuten)</label>
             <input
               type="number"
@@ -101,6 +107,7 @@
               min="0"
               step="1"
               value="{{ settings.inbox_interval_minutes or 0 }}"
+              {% if inbox_unavailable %}readonly aria-disabled="true"{% endif %}
             />
             <p class="muted">0 = deaktiviert. Wenn aktiviert, wird der Eingangsordner regelmäßig automatisch verarbeitet.</p>
           </div>

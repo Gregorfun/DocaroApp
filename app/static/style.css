@@ -359,6 +359,19 @@ html.dark-mode .result-card {
   font-style: italic;
 }
 
+/* Settings: Inbox features unavailable on Linux when configured with Windows paths */
+.is-unavailable-field {
+  opacity: 0.55;
+}
+
+.is-unavailable-field input[readonly] {
+  cursor: not-allowed;
+}
+
+.is-unavailable-text {
+  opacity: 0.65;
+}
+
 .result-details {
   grid-column: 1 / -1;
   margin-top: 12px;
@@ -584,6 +597,13 @@ html.dark-mode .badge-sonstiges {
   background: #3a3a3a;
   color: #999;
   border: 1px solid #555;
+}
+.badge-prüfbericht {
+  background: #2a7a7c;
+}
+
+html.dark-mode .badge-prüfbericht {
+  background: #3b8f91;
 }
 
 .col-file {

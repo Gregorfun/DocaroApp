@@ -25,7 +25,7 @@ class Config:
     SECRET_KEY_FILE = DATA_DIR / ".secret_key"
     SECRET_KEY: str | None = None
     DEBUG = os.getenv("DOCARO_DEBUG") == "1"
-    OCR_TIMEOUT_SECONDS = int(os.getenv("DOCARO_OCR_TIMEOUT", "8"))
+    OCR_TIMEOUT_SECONDS = int(os.getenv("DOCARO_OCR_TIMEOUT", "25"))
     PDF_CONVERT_TIMEOUT = int(os.getenv("DOCARO_PDF_CONVERT_TIMEOUT", "15"))
     ROTATION_OCR_TIMEOUT = int(os.getenv("DOCARO_ROTATION_OCR_TIMEOUT", "4"))
     DATE_CROP_OCR_TIMEOUT = int(os.getenv("DOCARO_DATE_CROP_TIMEOUT", "3"))

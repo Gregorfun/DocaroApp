@@ -6,6 +6,7 @@ Erkennt automatisch den Dokumenttyp basierend auf OCR/Text-Extraktion:
 - LIEFERSCHEIN
 - ÜBERNAHMESCHEIN
 - KOMMISSIONIERLISTE
+- PRÜFBERICHT
 - SONSTIGES
 """
 
@@ -36,6 +37,7 @@ class DocTypeClassifier:
     DOCTYPE_LIEFERSCHEIN = "LIEFERSCHEIN"
     DOCTYPE_UEBERNAHMESCHEIN = "ÜBERNAHMESCHEIN"
     DOCTYPE_KOMMISSIONIERLISTE = "KOMMISSIONIERLISTE"
+    DOCTYPE_PRUEFBERICHT = "PRÜFBERICHT"
     DOCTYPE_SONSTIGES = "SONSTIGES"
     
     def __init__(self):
@@ -131,6 +133,27 @@ class DocTypeClassifier:
             "lager", "lagerplatz", "regal", "fach", "position",
             "entnehmen", "bereitstellen"
         ]
+
+        # PRÜFBERICHT Keywords (z.B. DEKRA Prüfbericht / HU/AU)
+        self.pruefbericht_strong = [
+            "pruefbericht",
+            "prüfbericht",
+            "untersuchungsbericht",
+            "hauptuntersuchung",
+            "hu-bericht",
+            "hu bericht",
+        ]
+        self.pruefbericht_support = [
+            "stvzo",
+            "§ 29",
+            "maengel",
+            "mängel",
+            "kennz",
+            "kennzeichen",
+            "fahrzeug",
+            "fahrzeugschein",
+            "plakette",
+        ]
     
     def _normalize_text(self, text: str) -> str:
         """Normalisiert Text für robuste Keyword-Suche."""
@@ -177,6 +200,10 @@ class DocTypeClassifier:
         # Manitowoc-Rechnungen oft ohne "Rechnung" Keyword
         if supplier_canonical == "Manitowoc":
             scores[self.DOCTYPE_RECHNUNG] += 0.10
+
+        # DEKRA-Dokumente sind sehr häufig PRÜFBERICHT
+        if supplier_canonical == "Dekra" and self.DOCTYPE_PRUEFBERICHT in scores:
+            scores[self.DOCTYPE_PRUEFBERICHT] += 0.30
         
         return scores
     
@@ -203,6 +230,7 @@ class DocTypeClassifier:
             self.DOCTYPE_LIEFERSCHEIN: 0.0,
             self.DOCTYPE_UEBERNAHMESCHEIN: 0.0,
             self.DOCTYPE_KOMMISSIONIERLISTE: 0.0,
+            self.DOCTYPE_PRUEFBERICHT: 0.0,
         }
         evidences: Dict[str, List[str]] = {k: [] for k in scores.keys()}
 
@@ -252,6 +280,16 @@ class DocTypeClassifier:
             s2, ev2 = self._weighted_hits(seg_text, self.kommissionierliste_unterstuetzend, weight=w, add=0.10)
             scores[self.DOCTYPE_KOMMISSIONIERLISTE] += s2
             evidences[self.DOCTYPE_KOMMISSIONIERLISTE].extend([f"{e}@{seg_name}" for e in ev2])
+
+        # PRÜFBERICHT
+        for seg_name, seg_text in (("header", header_text), ("body", body_text), ("footer", footer_text)):
+            w = weights[seg_name]
+            s, ev = self._weighted_hits(seg_text, self.pruefbericht_strong, weight=w, add=0.40)
+            scores[self.DOCTYPE_PRUEFBERICHT] += s
+            evidences[self.DOCTYPE_PRUEFBERICHT].extend([f"{e}@{seg_name}" for e in ev])
+            s2, ev2 = self._weighted_hits(seg_text, self.pruefbericht_support, weight=w, add=0.08)
+            scores[self.DOCTYPE_PRUEFBERICHT] += s2
+            evidences[self.DOCTYPE_PRUEFBERICHT].extend([f"{e}@{seg_name}" for e in ev2])
 
         # Negative Keywords: Rechnung runter, wenn Lieferschein/Übernahme klar
         all_text_norm = self._normalize_text(text)

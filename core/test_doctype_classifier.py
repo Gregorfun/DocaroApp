@@ -116,12 +116,25 @@ def test_sonstiges():
     No clear indication of document type.
     
     Some random text here.
-    No invoice, delivery note, or disposal certificate keywords.
+    No clear billing or delivery references.
     """
     result = classify_doc_type(text)
     print(f"✓ SONSTIGES: doc_type={result.doc_type}, confidence={result.confidence:.2f}, evidence={result.evidence}")
     assert result.doc_type == "SONSTIGES", f"Expected SONSTIGES, got {result.doc_type}"
     # SONSTIGES kann niedrige confidence haben
+
+
+def test_pruefbericht_dekra():
+    """Test für PRÜFBERICHT-Klassifikation (DEKRA Prüfbericht)."""
+    text = """
+    DEKRA
+    Prüfbericht
+    Hauptuntersuchung gemäß § 29 StVZO
+    Kennz.: SO- FB 1494
+    """
+    result = classify_doc_type(text, supplier_canonical="Dekra")
+    print(f"✓ PRÜFBERICHT: doc_type={result.doc_type}, confidence={result.confidence:.2f}, evidence={result.evidence}")
+    assert result.doc_type == "PRÜFBERICHT", f"Expected PRÜFBERICHT, got {result.doc_type}"
 
 
 def test_rechnung_mit_supplier_hint():
@@ -162,6 +175,7 @@ if __name__ == "__main__":
         test_uebernahmeschein()
         test_kommissionierliste()
         test_sonstiges()
+        test_pruefbericht_dekra()
         test_rechnung_mit_supplier_hint()
         
         print("\n✅ Alle Tests erfolgreich!\n")

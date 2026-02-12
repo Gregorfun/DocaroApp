@@ -21,6 +21,8 @@ from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError, PD
 import pytesseract
 from PIL import ImageEnhance
 from PIL import Image
+from PIL import ImageOps
+from PIL import ImageFilter
 
 try:
     import date_parser  # type: ignore
@@ -87,25 +89,11 @@ USE_PADDLEOCR = getattr(config, "USE_PADDLEOCR", False)
 PADDLEOCR_LANG = getattr(config, "PADDLEOCR_LANG", "german")
 PADDLEOCR_FALLBACK_THRESHOLD = float(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle für Fallback
 PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
-PADDLEOCR_INSTANCE = None  # Lazy-init
 
-def _get_paddleocr_instance():
-    """Singleton für PaddleOCR-Instanz (lazy-init)."""
-    global PADDLEOCR_INSTANCE
-    if not USE_PADDLEOCR or PADDLEOCR_INSTANCE is not None:
-        return PADDLEOCR_INSTANCE
-    try:
-        import os as _os
-        # Disable GPU bei Speichermangel + model source check
-        _os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
-        from paddleocr import PaddleOCR
-        # PaddleOCR 3.4.0: Minimal config, defaults nutzen
-        PADDLEOCR_INSTANCE = PaddleOCR(lang='en')  # 'en' für westliche Sprachen
-        _LOGGER.info("PaddleOCR initialized successfully (lang=en)")
-    except Exception as e:
-        _LOGGER.warning(f"Failed to initialize PaddleOCR: {e}")
-        PADDLEOCR_INSTANCE = False  # Mark as failed
-    return PADDLEOCR_INSTANCE if PADDLEOCR_INSTANCE else None
+# Wenn Tesseract kaum Text liefert, lohnt sich oft ein zweiter Durchlauf
+# mit stärkerer Vorverarbeitung (Kontrast/Schärfe/Threshold). Default bewusst
+# konservativ – kann per Env var angepasst werden.
+AGGRESSIVE_TESSERACT_RETRY_SCORE = int(os.getenv("DOCARO_OCR_AGGRESSIVE_RETRY_SCORE", "250"))
 
 def _render_dpi() -> int:
     """DPI for PDF->image rendering.
@@ -675,13 +663,76 @@ def _has_osd_traineddata() -> bool:
     return any(candidate.exists() for candidate in candidates)
 
 
-def _ocr_image(image, rotation: int, config: str = "", timeout: Optional[int] = None, use_paddle: bool = False) -> str:
+def _preprocess_for_ocr(image: Image.Image, aggressive: bool = False) -> Image.Image:
+    """Lightweight OCR preprocessing.
+
+    Goal: improve OCR on low-contrast scans / watermarks while keeping defaults safe.
+    """
+    gray = image.convert("L")
+    # Mild: normalize contrast without hard thresholding.
+    gray = ImageOps.autocontrast(gray, cutoff=2)
+    gray = ImageEnhance.Contrast(gray).enhance(1.6)
+    gray = ImageEnhance.Sharpness(gray).enhance(1.2)
+
+    if not aggressive:
+        return gray
+
+    # Aggressive pass: additional denoise + percentile threshold.
+    # Works well on light blue backgrounds/watermarks.
+    blurred = gray.filter(ImageFilter.MedianFilter(size=3))
+    hist = blurred.histogram()  # 256 bins
+    total = sum(hist) or 1
+    cum = 0
+    # 60th percentile tends to separate background wash from text strokes.
+    target = int(total * 0.60)
+    thresh = 180
+    for i, count in enumerate(hist):
+        cum += count
+        if cum >= target:
+            thresh = i
+            break
+    bw = blurred.point(lambda p: 255 if p > thresh else 0, mode="1")
+    return bw.convert("L")
+
+
+def _downscale_for_ocr(image: Image.Image) -> Image.Image:
+    """Downscale very large scans to keep OCR fast and avoid timeouts."""
+    try:
+        width, height = image.size
+    except Exception:
+        return image
+
+    if width <= 0 or height <= 0:
+        return image
+
+    max_side = 2600
+    max_pixels = 6_000_000  # ~6MP is usually plenty for text OCR
+    pixels = width * height
+    side_scale = max_side / float(max(width, height)) if max(width, height) > max_side else 1.0
+    pixel_scale = (max_pixels / float(pixels)) ** 0.5 if pixels > max_pixels else 1.0
+    scale = min(side_scale, pixel_scale)
+    if scale >= 0.999:
+        return image
+
+    new_w = max(1, int(width * scale))
+    new_h = max(1, int(height * scale))
+    return image.resize((new_w, new_h), resample=Image.BILINEAR)
+
+
+def _ocr_image(
+    image,
+    rotation: int,
+    config: str = "",
+    timeout: Optional[int] = None,
+    use_paddle: bool = False,
+    aggressive_preprocess: bool = False,
+) -> str:
     if rotation:
         image = image.rotate(rotation, expand=True)
 
-    image = image.convert("L")
-    enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(1.5)
+    if isinstance(image, Image.Image):
+        image = _downscale_for_ocr(image)
+        image = _preprocess_for_ocr(image, aggressive=aggressive_preprocess)
 
     effective_timeout = OCR_TIMEOUT_SECONDS if timeout is None else timeout
     
@@ -693,36 +744,29 @@ def _ocr_image(image, rotation: int, config: str = "", timeout: Optional[int] = 
             config=config,
             timeout=effective_timeout,
         )
+    except RuntimeError as e:
+        # pytesseract uses RuntimeError("Tesseract process timeout") for timeouts
+        msg = str(e).lower()
+        if "timeout" in msg and "tesseract" in msg:
+            if use_paddle:
+                text, _, _ = _paddle_ocr_image(image)
+                return text
+            raise TimeoutError(str(e))
+        raise
     except (pytesseract.TesseractError, TimeoutError) as e:
         if use_paddle:
             # Fallback zu PaddleOCR wenn explizit gewünscht
-            return _ocr_image_paddle(image, timeout=effective_timeout)
+            text, _, _ = _paddle_ocr_image(image)
+            return text
         raise
 
 def _ocr_image_paddle(image, timeout: Optional[int] = None) -> str:
-    """OCR mit PaddleOCR (Fallback)."""
-    if not USE_PADDLEOCR:
-        return ""
-    
-    try:
-        paddle_ocr = _get_paddleocr_instance()
-        if not paddle_ocr:
-            return ""
-        
-        # PaddleOCR braucht RGB für manche Modelle
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        result = paddle_ocr.ocr(image, cls=True)
-        if not result or not result[0]:
-            return ""
-        
-        # PaddleOCR gibt Liste von [[bbox], text, confidence] zurück
-        text_lines = [line[1] for line in result[0] if len(line) > 1]
-        return '\n'.join(text_lines)
-    except Exception as e:
-        _LOGGER.debug(f"PaddleOCR failed: {e}")
-        return ""
+    """OCR mit PaddleOCR (Fallback).
+
+    NOTE: kept for backwards-compat, internally uses _paddle_ocr_image.
+    """
+    text, _, _ = _paddle_ocr_image(image)
+    return text
 
 
 def _count_keywords(text: str) -> int:
@@ -985,6 +1029,7 @@ def _detect_osd_rotation(image) -> Optional[int]:
 def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
     def _safe_ocr(rotation: int, use_paddle_fallback: bool = False) -> Tuple[str, str, int]:
         try:
+            # First try with mild preprocessing.
             text_value = _ocr_image(image, rotation=rotation, use_paddle=use_paddle_fallback)
         except (pytesseract.TesseractError, TimeoutError) as exc:
             message = str(exc)
@@ -1004,7 +1049,24 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
                 except Exception:
                     pass
             return "", f"ocr_failed: {exc}", 0
-        return text_value, "", _score_text(text_value)
+
+        base_score = _score_text(text_value)
+        # If score is very low, retry Tesseract once with aggressive preprocessing.
+        if base_score < AGGRESSIVE_TESSERACT_RETRY_SCORE:
+            try:
+                aggressive_text = _ocr_image(
+                    image,
+                    rotation=rotation,
+                    use_paddle=use_paddle_fallback,
+                    aggressive_preprocess=True,
+                )
+                aggressive_score = _score_text(aggressive_text)
+                if aggressive_score > base_score * 1.15 and aggressive_text.strip():
+                    return aggressive_text, "", aggressive_score
+            except Exception:
+                pass
+
+        return text_value, "", base_score
 
     if force_best:
         best_rotation = 0
@@ -1036,18 +1098,28 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
     text_length = len(text.strip())
     has_keywords = _count_keywords(text) > 0
     needs_rotation = text_length < 200 or not has_keywords
-    
-    # PaddleOCR-Fallback bei sehr schlechtem Tesseract-Score
-    if USE_PADDLEOCR and not needs_rotation and base_score < PADDLEOCR_FALLBACK_THRESHOLD:
+
+    # PaddleOCR-Fallback/Upgrade auch für "no_keywords" Dokumente.
+    # Bei Zertifikaten/Reports (z.B. DEKRA) sind Lieferschein-Keywords oft nicht vorhanden,
+    # trotzdem wollen wir brauchbaren OCR-Text.
+    if USE_PADDLEOCR and (base_score < PADDLEOCR_FALLBACK_THRESHOLD or needs_rotation):
         try:
             paddle_text = _ocr_image_paddle(image)
             if paddle_text:
                 paddle_score = _score_text(paddle_text)
-                if paddle_score > base_score * 1.2:  # Mindestens 20% besser
-                    _LOGGER.info(f"PaddleOCR upgrade: {base_score} → {paddle_score}")
-                    return {"text": paddle_text, "error": "", "rotation": "0", "rotation_reason": "paddle_upgrade", "score": str(paddle_score)}
+                # Accept if clearly better or if Tesseract basically failed.
+                if base_score <= 0 or paddle_score > max(base_score * 1.2, base_score + 120):
+                    reason = "paddle_upgrade" if base_score > 0 else "paddle_fallback"
+                    _LOGGER.info(f"PaddleOCR {reason}: {base_score} → {paddle_score}")
+                    return {
+                        "text": paddle_text,
+                        "error": "",
+                        "rotation": "0",
+                        "rotation_reason": reason,
+                        "score": str(paddle_score),
+                    }
         except Exception as e:
-            _LOGGER.debug(f"PaddleOCR upgrade attempt failed: {e}")
+            _LOGGER.debug(f"PaddleOCR attempt failed: {e}")
     
     if not needs_rotation:
         return {"text": text, "error": "", "rotation": "0", "rotation_reason": "", "score": str(base_score)}
@@ -2032,6 +2104,24 @@ def detect_supplier_detailed(
                 "confidence": 0.995,
                 "source": "explicit_ortjohann_kraft",
                 "matched": "Ortjohann+Kraft(letterhead)",
+                "segment": "header",
+            },
+        )
+
+    dekra_detected = (
+        re.search(r"\bdekra\b", letterhead_norm, flags=re.IGNORECASE) is not None
+        or "dekra autom" in letterhead_norm
+        or "dekra industrial" in letterhead_norm
+        or "dekra certification" in letterhead_norm
+    )
+    if dekra_detected:
+        candidates.insert(
+            0,
+            {
+                "canonical": "Dekra",
+                "confidence": 0.995,
+                "source": "explicit_dekra",
+                "matched": "DEKRA(letterhead)",
                 "segment": "header",
             },
         )

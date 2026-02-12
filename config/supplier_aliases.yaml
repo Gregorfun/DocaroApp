@@ -169,6 +169,18 @@ suppliers:
       - "(?i)foerch"
     domain_hints: ["foerch.de"]
 
+  # DEKRA Prüfberichte
+  DEKRA:
+    canonical: "Dekra"
+    aliases:
+      - "DEKRA"
+      - "Dekra"
+      - "DEKRA Automobil"
+      - "DEKRA Automobil GmbH"
+    regex_patterns:
+      - "(?i)\\bdekra\\b"
+    domain_hints: ["dekra.com", "dekra.de"]
+
   # Tadano / CEVA Logistics
   TADANO:
     canonical: "Tadano"

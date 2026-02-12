@@ -216,6 +216,51 @@ class TestDocNumberExtraction(unittest.TestCase):
         # 2025-11-26 sollte nicht als Nummer erkannt werden (ist Datum)
         if result.doc_number:
             self.assertNotIn("2025-11-26", result.doc_number)
+
+    def test_dekra_plate_extraction_prefers_real_plate(self):
+        """DEKRA/Prüfbericht: Kennzeichen soll als Dokumentnummer extrahiert werden."""
+        text = """
+        DEKRA
+        Prüfbericht
+        vom 06.02.2026
+        Kennzeichen: SO- FB 1494
+        """
+        result = self.extractor.extract_doc_number(text, "Dekra", "PRÜFBERICHT")
+        self.assertEqual(result.doc_number, "SO-FB1494")
+        self.assertEqual(result.source_field, "kennzeichen")
+        self.assertEqual(result.confidence, "high")
+
+    def test_dekra_plate_extraction_ignores_false_positives(self):
+        """DEKRA: False-Positives wie 'GMB-H 2' oder 'VOM 06' dürfen nicht gewinnen."""
+        text = """
+        DEKRA
+        Prüfbericht
+        GMB-H 2
+        vom 06.02.2026
+        Kennzeichen SO-FB1494
+        """
+        result = self.extractor.extract_doc_number(text, "Dekra", "PRÜFBERICHT")
+        self.assertEqual(result.doc_number, "SO-FB1494")
+        self.assertEqual(result.source_field, "kennzeichen")
+        self.assertEqual(result.confidence, "high")
+
+    def test_dekra_plate_extraction_prefers_plate_over_protocol_number(self):
+        """DEKRA: Kennzeichen (oft unten) muss die Protokollnummer schlagen."""
+        text = """
+        DEKRA
+        Prüfbericht
+        Sicherheitsprüfung gemäß § 29 StVZO
+        Prüfprotokoll-Nr.: P087046002132
+        vom 06.02.2026
+        
+        Ergebnis ohne festgestellte Mängel
+        SO FB1282
+        nächste HU fällig Februar 2027
+        """
+        result = self.extractor.extract_doc_number(text, "Dekra", "PRÜFBERICHT")
+        self.assertEqual(result.doc_number, "SO-FB1282")
+        self.assertEqual(result.source_field, "kennzeichen")
+        self.assertEqual(result.confidence, "high")
     
     def test_filter_plz(self):
         """Test: Filtere PLZ (5-stellige Zahl ohne Kontext)."""
