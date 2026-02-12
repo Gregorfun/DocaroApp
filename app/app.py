@@ -1022,6 +1022,19 @@ def status_json():
             except Exception:
                 active_job_status = "unknown"
         progress = _load_progress()
+        results = _load_last_results() or []
+        recent_item = results[-1] if results else {}
+        recent_result = {
+            "out_name": recent_item.get("out_name") or "",
+            "supplier": recent_item.get("supplier") or "",
+            "date": recent_item.get("date") or "",
+            "doc_type": recent_item.get("doc_type") or "",
+            "doc_number": recent_item.get("doc_number") or "",
+            "supplier_confidence": recent_item.get("supplier_confidence") or "",
+            "processing_route": recent_item.get("processing_route") or "",
+            "review_priority_score": recent_item.get("review_priority_score") or "",
+            "needs_review": bool(recent_item.get("needs_review")),
+        }
         return jsonify({
             "ok": True,
             "processing": processing,
@@ -1029,8 +1042,9 @@ def status_json():
             "active_job_status": active_job_status,
             "queue_depth": int(q.count),
             "files": _list_finished(),
-            "results_count": len(_load_last_results() or []),
+            "results_count": len(results),
             "progress": progress,
+            "recent_result": recent_result,
         })
     except Exception as exc:
         _log_exception("status:handler", exc)
@@ -1048,6 +1062,21 @@ def status_stream():
                     "queue_depth": int(q.count),
                     "progress": _load_progress(),
                     "active_job_id": str(session.get("active_job_id") or ""),
+                    "active_job_status": "",
+                    "results_count": len(_load_last_results() or []),
+                }
+                results = _load_last_results() or []
+                recent_item = results[-1] if results else {}
+                payload["recent_result"] = {
+                    "out_name": recent_item.get("out_name") or "",
+                    "supplier": recent_item.get("supplier") or "",
+                    "date": recent_item.get("date") or "",
+                    "doc_type": recent_item.get("doc_type") or "",
+                    "doc_number": recent_item.get("doc_number") or "",
+                    "supplier_confidence": recent_item.get("supplier_confidence") or "",
+                    "processing_route": recent_item.get("processing_route") or "",
+                    "review_priority_score": recent_item.get("review_priority_score") or "",
+                    "needs_review": bool(recent_item.get("needs_review")),
                 }
                 yield f"data: {json.dumps(payload, ensure_ascii=True)}\n\n"
                 if not payload["processing"]:
@@ -1327,11 +1356,13 @@ def upload():
             return redirect(url_for("index"))
 
         date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
+        include_known = request.form.get("include_known") in ("1", "on", "true")
 
         upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
         upload_dir.mkdir(parents=True, exist_ok=True)
         saved_count = 0
         duplicate_files: list[str] = []
+        known_forced_files: list[str] = []
         for storage in uploaded:
             if not storage or not storage.filename:
                 continue
@@ -1350,9 +1381,12 @@ def upload():
                 except Exception:
                     known = None
                 if known:
-                    duplicate_files.append(safe_name)
-                    _safe_unlink(target_path)
-                    continue
+                    if include_known:
+                        known_forced_files.append(safe_name)
+                    else:
+                        duplicate_files.append(safe_name)
+                        _safe_unlink(target_path)
+                        continue
                 try:
                     _runtime_store.register_document_fingerprint(
                         file_hash,
@@ -1371,15 +1405,24 @@ def upload():
             )
             if duplicate_files:
                 flash(
-                    f"Alle Dateien waren bereits bekannt und wurden übersprungen: "
-                    f"{', '.join(sorted(set(duplicate_files))[:5])}"
+                    f"Bekannte Dateien wurden übersprungen ({len(duplicate_files)}): "
+                    f"{', '.join(sorted(set(duplicate_files))[:5])}. "
+                    "Aktiviere 'Bekannte Dateien trotzdem scannen', um sie erneut zu verarbeiten.",
+                    "duplicate",
                 )
                 return redirect(url_for("index"))
             flash("Keine gültigen PDF-Dateien gefunden (nur .pdf erlaubt).")
             return redirect(url_for("index"))
 
         if duplicate_files:
-            flash(f"{len(duplicate_files)} Dublette(n) übersprungen.")
+            flash(
+                f"{len(duplicate_files)} bekannte Datei(en) übersprungen. "
+                "Zum erneuten Scannen beim nächsten Upload die Option "
+                "'Bekannte Dateien trotzdem scannen' aktivieren.",
+                "duplicate",
+            )
+        if known_forced_files:
+            flash(f"{len(known_forced_files)} bekannte Datei(en) wurden auf Wunsch erneut gescannt.")
 
         logger.info("Upload accepted: %s PDFs saved to %s", saved_count, upload_dir)
 

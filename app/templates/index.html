@@ -54,10 +54,10 @@
           </script>
           <script src="{{ url_for('static', filename='upload-messages.js') }}"></script>
         {% endif %}
-        {% with messages = get_flashed_messages() %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
-            {% for message in messages %}
-              <p class="notice">{{ message }}</p>
+            {% for category, message in messages %}
+              <p class="notice {% if category == 'duplicate' %}notice-duplicate{% endif %}">{{ message }}</p>
             {% endfor %}
           {% endif %}
         {% endwith %}
@@ -77,6 +77,10 @@
               <option value="%d-%m-%Y" selected>Deutsch mit Bindestrich (DD-MM-YYYY)</option>
               <option value="%Y%m%d">Kompakt (YYYYMMDD)</option>
             </select>
+          </label>
+          <label class="checkbox duplicate-upload-option">
+            <input type="checkbox" name="include_known" value="1" />
+            <span>Bekannte Dateien trotzdem scannen</span>
           </label>
           <button type="submit">Upload &amp; Verarbeiten</button>
         </form>
