@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 import os
 import sys
 import logging
@@ -8,18 +9,43 @@ from redis import Redis
 from rq import Worker, Queue
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Prepend project root to sys.path so imports work regardless of install path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+from core.metrics import (
+    count_step_error,
+    start_metrics_http_server_from_env,
+    update_queue_depths,
+)  # noqa: E402
+from core.observability import init_sentry  # noqa: E402
 
-listen = ['high', 'default', 'low']
+listen = ["high", "default", "low"]
 os.environ.setdefault("DOCARO_WORKER", "1")
-redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 conn = Redis.from_url(redis_url)
+queue_max_depth = int(os.getenv("DOCARO_QUEUE_MAX_DEPTH", "200"))
+
+
+def _start_queue_metrics_thread() -> None:
+    """Periodically publish queue depth metrics for Prometheus."""
+    listen_queues = tuple(listen)
+    interval = float(os.getenv("DOCARO_QUEUE_METRICS_INTERVAL_SECONDS", "5") or "5")
+
+    def _loop() -> None:
+        while True:
+            try:
+                update_queue_depths(conn, listen_queues)
+            except Exception as exc:
+                count_step_error("queue_depth", exc)
+            time.sleep(max(1.0, interval))
+
+    thread = threading.Thread(target=_loop, name="docaro-queue-metrics", daemon=True)
+    thread.start()
+    logger.info("Queue-Metrics Thread gestartet (interval=%ss)", interval)
 
 
 def _start_inbox_scheduler_thread() -> None:
@@ -58,6 +84,7 @@ def _start_inbox_scheduler_thread() -> None:
                     # On Linux, Windows local drive paths are not accessible.
                     try:
                         from app.app import _looks_like_windows_drive_path
+
                         if _looks_like_windows_drive_path(inbox_dir_raw_str):
                             logger.warning(
                                 "Inbox-Autojob übersprungen: Windows-Pfad auf Linux nicht erreichbar (%s). "
@@ -86,17 +113,23 @@ def _start_inbox_scheduler_thread() -> None:
                     continue
 
                 inbox_dir.mkdir(parents=True, exist_ok=True)
-                pdfs = sorted(
-                    p
-                    for p in inbox_dir.iterdir()
-                    if p.is_file() and p.suffix.lower() == ".pdf"
-                )
+                pdfs = sorted(p for p in inbox_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf")
                 if not pdfs:
                     continue
 
                 _set_progress(total=len(pdfs), done=0)
                 _set_processing(True)
                 try:
+                    current_depth = int(q.count)
+                    if current_depth >= queue_max_depth:
+                        logger.warning(
+                            "Inbox-Autojob übersprungen: Queue ausgelastet (%s >= %s)",
+                            current_depth,
+                            queue_max_depth,
+                        )
+                        _set_processing(False)
+                        time.sleep(5)
+                        continue
                     q.enqueue(
                         background_process_folder,
                         args=(inbox_dir, date_fmt),
@@ -121,9 +154,13 @@ def _start_inbox_scheduler_thread() -> None:
     thread.start()
     logger.info("Inbox-Scheduler Thread gestartet")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     logger.info(f"Starting worker with Redis URL: {redis_url}")
     try:
+        init_sentry("worker")
+        start_metrics_http_server_from_env(default_port=9108)
+        _start_queue_metrics_thread()
         _start_inbox_scheduler_thread()
         # Explicitly pass connection to Queues and Worker to avoid context manager issues
         queues = [Queue(name, connection=conn) for name in listen]
@@ -133,5 +170,6 @@ if __name__ == '__main__':
         logger.error(f"Failed to start worker: {e}")
         # Print full traceback to logs
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

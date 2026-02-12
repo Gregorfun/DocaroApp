@@ -9,8 +9,16 @@ pytest-mock>=3.10.0
 # Code quality
 black>=23.0.0
 flake8>=6.0.0
+ruff>=0.8.0
+pre-commit>=3.7.0
 mypy>=1.0.0
 pylint>=2.15.0
+
+# Performance testing
+pytest-benchmark>=4.0.0
+locust>=2.31.0
+dvc>=3.50.0
+evidently>=0.6.0
 
 # Type stubs
 types-python-dateutil>=2.8.0

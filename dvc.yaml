@@ -1,0 +1,8 @@
+stages:
+  ground_truth_snapshot:
+    cmd: python tools/export_ground_truth_snapshot.py
+    deps:
+      - data/ml/ground_truth.jsonl
+      - tools/export_ground_truth_snapshot.py
+    outs:
+      - artifacts/ml/ground_truth_snapshot.jsonl

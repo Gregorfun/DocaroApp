@@ -1,0 +1,72 @@
+groups:
+  - name: docaro-pipeline-alerts
+    rules:
+      - alert: DocaroWorkerMetricsDown
+        expr: up{job="docaro-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Docaro worker metrics endpoint is down"
+          description: "Prometheus cannot scrape docaro-worker metrics on port 9108."
+
+      - alert: DocaroOCRP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(docaro_ocr_duration_seconds_bucket[5m]))
+          ) > 8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Docaro OCR p95 latency is high"
+          description: "OCR p95 is above 8s for at least 10 minutes."
+
+      - alert: DocaroOCRP99High
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(docaro_ocr_duration_seconds_bucket[5m]))
+          ) > 15
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Docaro OCR p99 latency is very high"
+          description: "OCR p99 is above 15s for at least 10 minutes."
+
+      - alert: DocaroPipelineErrorRateHigh
+        expr: |
+          (
+            sum(rate(docaro_pipeline_step_errors_total[5m]))
+            /
+            clamp_min(sum(rate(docaro_pipeline_jobs_total[5m])), 0.001)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Docaro pipeline error rate is high"
+          description: "Error-to-job ratio is above 10% over the last 5 minutes."
+
+      - alert: DocaroQueueBacklogGrowing
+        expr: |
+          increase(docaro_pipeline_queue_depth{queue="default"}[10m]) > 20
+          and docaro_pipeline_queue_depth{queue="default"} > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Docaro queue backlog is growing"
+          description: "Default queue depth increased by more than 20 in 10m and remains above 10."
+
+      - alert: DocaroRuntimeStoreErrors
+        expr: |
+          sum(rate(docaro_pipeline_step_errors_total{step=~"runtime_store_.*"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Docaro runtime store reports errors"
+          description: "SQLite runtime-store operations are failing in the last 10 minutes."

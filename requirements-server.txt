@@ -1,1 +1,5 @@
-rq\nredis
+rq
+redis
+prometheus-client
+sentry-sdk
+rq-dashboard

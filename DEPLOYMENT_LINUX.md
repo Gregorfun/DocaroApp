@@ -96,6 +96,12 @@ Wichtigste Variablen:
 - `REDIS_URL` (default: `redis://localhost:6379`)
 - `DOCARO_DEBUG=0|1`
 - optional: `DOCARO_RENDER_DPI`, `DOCARO_FOLDER_TIMEOUT`
+- optional Observability: `DOCARO_METRICS_ENABLED=1`, `DOCARO_WORKER_METRICS_PORT=9108`
+- optional Sentry: `DOCARO_SENTRY_DSN`, `DOCARO_SENTRY_ENVIRONMENT`, `DOCARO_RELEASE`
+- optional RQ Dashboard: `DOCARO_RQ_DASHBOARD_ENABLED=1`, `DOCARO_RQ_DASHBOARD_URL_PREFIX=/rq`
+- optional Logging-Format: `DOCARO_LOG_FORMAT=json`
+- optional Queue/OCR-Worker-Limits: `DOCARO_QUEUE_MAX_DEPTH`, `DOCARO_PROCESS_MAX_WORKERS`, `DOCARO_PROCESS_ADAPTIVE_WORKERS`
+- optional Model-Gates: `DOCARO_MODEL_MIN_ACCURACY`, `DOCARO_MODEL_MIN_F1_WEIGHTED`
 
 ## 5) systemd Units installieren
 
@@ -177,3 +183,18 @@ Wenn du das nutzt:
 sudo install -m 0755 /opt/docaro/deploy/docaro-update.sh /usr/local/bin/docaro-update.sh
 ```
 
+## 10) Optional: Monitoring Stack (Prometheus/Grafana)
+
+Docaro exportiert Worker-Metriken auf `:9108` (default, via `DOCARO_WORKER_METRICS_PORT` anpassbar).
+
+Stack starten:
+
+```bash
+cd /opt/docaro
+docker compose -f docker/docker-compose.yml up -d prometheus grafana redis-exporter
+```
+
+Zugriff:
+
+- Prometheus: `http://<server>:9090`
+- Grafana: `http://<server>:3000` (Default: `admin/admin`)

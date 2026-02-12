@@ -13,6 +13,79 @@ Wenn das ursprüngliche Git-Remote nicht mehr existiert:
 
 - [NEW_GITHUB_REPO_SETUP.md](NEW_GITHUB_REPO_SETUP.md)
 
+## 📈 Observability (Prometheus + Grafana)
+
+Docaro exportiert Laufzeitmetriken aus dem Worker (Port `9108`, konfigurierbar via `DOCARO_WORKER_METRICS_PORT`):
+
+- `docaro_ocr_duration_seconds`
+- `docaro_pdf_render_duration_seconds`
+- `docaro_pipeline_queue_depth`
+- `docaro_pipeline_step_errors_total`
+- `docaro_pipeline_step_duration_seconds`
+
+Monitoring-Stack starten:
+
+```bash
+docker compose -f docker/docker-compose.yml up -d prometheus grafana redis-exporter
+```
+
+Danach:
+
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (`admin` / `admin`)
+
+Das Basis-Dashboard wird automatisch provisioniert (`Docaro Observability`), inklusive P95/P99-Latenzen und Queue-/Error-Sicht.
+
+## ⚡ Runtime Performance
+
+JSON-Hotpaths (`session_files`, `history`, `supplier_corrections`) laufen jetzt über SQLite
+(`data/runtime_state.db`) mit automatischer Bestandsmigration beim ersten Start.
+
+Manuelle Migration/Verifikation:
+
+```bash
+python tools/migrate_runtime_store.py
+```
+
+Perzentil-Report aus `data/logs/run.csv`:
+
+```bash
+python tools/report_performance_percentiles.py
+```
+
+## 🚨 Exception Tracking (Sentry)
+
+Sentry ist optional und wird nur aktiviert, wenn `DOCARO_SENTRY_DSN` gesetzt ist.
+
+Relevante ENV-Variablen:
+
+- `DOCARO_SENTRY_ENABLED=1`
+- `DOCARO_SENTRY_DSN=...`
+- `DOCARO_SENTRY_ENVIRONMENT=production|staging|development`
+- `DOCARO_RELEASE=docaro-<sha>`
+- `DOCARO_SENTRY_TRACES_SAMPLE_RATE=0.1` (optional)
+
+Sentry ist im Web-Service und im RQ-Worker eingebunden, inklusive RQ-Integration für Job-Exceptions.
+
+## 🧠 Retraining Gates
+
+Retraining kann Modelle nur bei Mindestqualität in „production“ promoten
+(`data/ml/production_models.json`):
+
+- `DOCARO_MODEL_MIN_ACCURACY`
+- `DOCARO_MODEL_MIN_F1_WEIGHTED`
+- `DOCARO_MODEL_ALLOW_NO_EVAL`
+
+## 🧰 RQ Dashboard
+
+Das RQ Dashboard ist in die Flask-App integriert und standardmäßig unter `/rq` erreichbar
+(Login-Schutz über die bestehende Auth-Middleware).
+
+Konfiguration:
+
+- `DOCARO_RQ_DASHBOARD_ENABLED=1`
+- `DOCARO_RQ_DASHBOARD_URL_PREFIX=/rq`
+
 ---
 
 ## 🎯 Features
@@ -177,6 +250,60 @@ results = service.search("Rechnungen von ABC GmbH Januar 2026")
 - **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Schrittweise Integration
 - **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Übersicht aller Komponenten
 
+## 🧪 DevEx & Qualität
+
+### Pre-commit + Ruff
+
+```bash
+pip install -r requirements-dev.txt
+pre-commit install
+pre-commit run --all-files
+```
+
+### Performance-Baselines
+
+- `pytest-benchmark`:
+  ```bash
+  pytest tests/performance/test_benchmark_extractor.py --benchmark-only
+  ```
+- `Locust`:
+  ```bash
+  DOCARO_LOAD_HOST=http://127.0.0.1:5001 locust -f loadtests/locustfile.py
+  ```
+- `k6`:
+  ```bash
+  BASE_URL=http://127.0.0.1:5001 k6 run loadtests/k6-smoke.js
+  ```
+
+### Dependency-Updates
+
+Dependabot ist über `.github/dependabot.yml` aktiviert (pip, GitHub Actions, Docker).
+Zusätzlich läuft ein Security-Workflow mit `pip-audit` unter `.github/workflows/security.yml`.
+
+## 🗃️ Data Versioning (DVC)
+
+Für Trainingsdaten-Reproduzierbarkeit ist ein DVC-Stage vorbereitet:
+
+```bash
+pip install -r requirements-dev.txt
+dvc repro ground_truth_snapshot
+```
+
+Der Stage exportiert `data/ml/ground_truth.jsonl` nach `artifacts/ml/ground_truth_snapshot.jsonl`
+(`dvc.yaml`, `tools/export_ground_truth_snapshot.py`).
+
+## 📉 Drift Monitoring (optional)
+
+Optionales Evidently-basiertes Drift-Reporting:
+
+```bash
+python tools/drift_report.py
+```
+
+Outputs:
+- `artifacts/drift/drift_report.html` (wenn Evidently installiert)
+- `artifacts/drift/drift_report.json`
+
 ---
 
 ## 🛠️ Technologie-Stack
@@ -241,8 +368,8 @@ Docaro/
 ### Pipeline-Workflow
 
 ```
-PDF → Qualitätsprüfung → OCR (falls nötig) → Docling (Layout) 
-    → ML-Analyse (Supplier/Date/Type) → Quarantäne-Check 
+PDF → Qualitätsprüfung → OCR (falls nötig) → Docling (Layout)
+    → ML-Analyse (Supplier/Date/Type) → Quarantäne-Check
     → Finalisierung (Umbenennung & Verschiebung)
 ```
 

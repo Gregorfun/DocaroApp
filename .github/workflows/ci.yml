@@ -12,60 +12,98 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: read
-    
+
     strategy:
       matrix:
         python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y tesseract-ocr tesseract-ocr-deu poppler-utils
-    
+
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-cov
-    
+        pip install pytest pytest-cov pytest-benchmark
+
     - name: Run tests
       run: |
         python -m pytest
 
-  lint:
+  benchmark:
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: read
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-benchmark
+
+    - name: Run benchmark tests
+      run: |
+        python -m pytest tests/performance/test_benchmark_extractor.py --benchmark-only --benchmark-json=benchmark.json
+
+    - name: Enforce benchmark threshold
+      run: |
+        python tools/check_benchmark_threshold.py benchmark.json 0.00005
+
+    - name: Upload benchmark artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: benchmark.json
+
+  lint:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 black
-    
-    - name: Lint with flake8
+        pip install ruff black pre-commit
+
+    - name: Lint with Ruff
       run: |
-        flake8 app core --count --max-line-length=120 --statistics --ignore=E501,W503
-    
+        ruff check app/runtime_storage.py core/metrics.py core/observability.py core/runtime_store.py services/worker.py tests/performance tests/test_runtime_store.py tests/test_benchmark_threshold.py loadtests/locustfile.py tools/export_ground_truth_snapshot.py tools/drift_report.py tools/report_performance_percentiles.py tools/check_benchmark_threshold.py tools/migrate_runtime_store.py
+
     - name: Check formatting with black
       run: |
-        black --check app core config.py constants.py date_parser.py utils.py --line-length=120
+        black --check app/runtime_storage.py core/metrics.py core/observability.py core/runtime_store.py services/worker.py tests/performance tests/test_runtime_store.py tests/test_benchmark_threshold.py loadtests/locustfile.py tools/export_ground_truth_snapshot.py tools/drift_report.py tools/report_performance_percentiles.py tools/check_benchmark_threshold.py tools/migrate_runtime_store.py --line-length=120
+
+    - name: Run pre-commit hooks
+      run: |
+        pre-commit run --files app/runtime_storage.py core/metrics.py core/observability.py core/runtime_store.py services/worker.py tests/performance/test_benchmark_extractor.py tests/test_runtime_store.py tests/test_benchmark_threshold.py loadtests/locustfile.py tools/export_ground_truth_snapshot.py tools/drift_report.py tools/report_performance_percentiles.py tools/check_benchmark_threshold.py tools/migrate_runtime_store.py

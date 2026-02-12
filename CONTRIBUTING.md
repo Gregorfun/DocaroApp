@@ -27,6 +27,8 @@ source venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
+pre-commit install
 ```
 
 ### 4. Umgebungsvariablen konfigurieren
@@ -72,6 +74,7 @@ Docaro/
 - Verwenden Sie aussagekräftige Variablennamen (auch auf Deutsch, wenn sinnvoll)
 - Fügen Sie Docstrings für Funktionen und Klassen hinzu
 - Verwenden Sie Type Hints wo möglich
+- Vor jedem Commit `pre-commit run --all-files` ausführen
 
 ### Beispiel:
 
@@ -79,11 +82,11 @@ Docaro/
 def extract_date(text: str, format_hint: str = "") -> Optional[datetime]:
     """
     Extrahiert ein Datum aus einem Text.
-    
+
     Args:
         text: Der zu durchsuchende Text
         format_hint: Optional ein erwartetes Datumsformat
-        
+
     Returns:
         datetime-Objekt oder None, wenn kein Datum gefunden wurde
     """
@@ -149,6 +152,9 @@ python -m pytest core/test_extractor.py::test_name -v
 
 # Mit Coverage
 python -m pytest --cov=core core/test_extractor.py
+
+# Benchmark-Tests
+python -m pytest tests/performance/test_benchmark_extractor.py --benchmark-only
 ```
 
 ## Häufige Aufgaben

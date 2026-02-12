@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
@@ -73,7 +74,7 @@ class Config:
             # Datei verstecken (Windows)
             if os.name == "nt":
                 import subprocess
-                subprocess.run(["attrib", "+H", str(Config.SECRET_KEY_FILE)], 
+                subprocess.run(["attrib", "+H", str(Config.SECRET_KEY_FILE)],
                              check=False, capture_output=True)
         except Exception:
             pass
@@ -84,8 +85,28 @@ class Config:
         """Richtet zentrales Logging ein."""
         logger = logging.getLogger()
         logger.setLevel(logging.INFO if not Config.DEBUG else logging.DEBUG)
+        logger.handlers.clear()
 
         Config.LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        log_format = os.getenv("DOCARO_LOG_FORMAT", "text").strip().lower()
+
+        class JsonFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                payload = {
+                    "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "msg": record.getMessage(),
+                }
+                if record.exc_info:
+                    payload["exc_info"] = self.formatException(record.exc_info)
+                return json.dumps(payload, ensure_ascii=True)
+
+        if log_format == "json":
+            formatter: logging.Formatter = JsonFormatter()
+        else:
+            formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
 
         # File Handler mit Rotation
         file_handler = RotatingFileHandler(
@@ -95,7 +116,6 @@ class Config:
             encoding="utf-8"
         )
         file_handler.setLevel(logging.INFO if not Config.DEBUG else logging.DEBUG)
-        formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 

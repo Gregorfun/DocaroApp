@@ -14,6 +14,9 @@ PyYAML
 # Nutze dafür requirements-ml.txt.
 rq
 redis
+prometheus-client
+sentry-sdk
+rq-dashboard
 
 # Optional (schnelleres PDF-Rendering ohne Poppler):
 pymupdf

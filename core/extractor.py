@@ -12,6 +12,7 @@ import subprocess
 import logging
 import threading
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -56,6 +57,13 @@ except ImportError:
     DocumentStatus = None
 
 from config import Config
+from core.metrics import (
+    count_job,
+    count_step_error,
+    observe_ocr,
+    observe_pdf_render,
+    observe_pipeline_step,
+)
 
 config = Config()
 from constants import DATE_REGEX_PATTERNS, LABEL_PATTERNS, LABEL_PRIORITY, DATE_LABELS
@@ -735,7 +743,7 @@ def _ocr_image(
         image = _preprocess_for_ocr(image, aggressive=aggressive_preprocess)
 
     effective_timeout = OCR_TIMEOUT_SECONDS if timeout is None else timeout
-    
+
     # Versuche Tesseract (primär)
     try:
         return pytesseract.image_to_string(
@@ -1120,7 +1128,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
                     }
         except Exception as e:
             _LOGGER.debug(f"PaddleOCR attempt failed: {e}")
-    
+
     if not needs_rotation:
         return {"text": text, "error": "", "rotation": "0", "rotation_reason": "", "score": str(base_score)}
 
@@ -1143,7 +1151,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
                 }
             else:
                 # OSD rotation ist nicht besser; bleib bei 0°
-                _LOGGER.info("osd_rotation rejected: %s (base=%d, osd=%d, need >%.0f)", 
+                _LOGGER.info("osd_rotation rejected: %s (base=%d, osd=%d, need >%.0f)",
                             osd_rotation, base_score, osd_score, base_score * 1.1)
         except (pytesseract.TesseractError, TimeoutError) as exc:
             _LOGGER.info("osd_rotation failed: %s -> %s", osd_rotation, exc)
@@ -1662,19 +1670,19 @@ def extract_best_date(
         # Strategie: Nur Rotation 0° testen; andere Rotationen NUR als Fallback wenn nichts gefunden
         best_image = images[0]
         best_rotation = known_rotation if known_rotation is not None else 0
-        
+
         # Erste Rotation (normalerweise 0° oder bekannte Rotation)
         first_texts = _ocr_rois(best_image, best_rotation, ["roi1", "roi2"])
         combined_text = "\n".join(first_texts)
         first_score = _score_rotation_text(combined_text)
-        
+
         # Prüfe ob erste Rotation bereits gute Ergebnisse liefert
         has_date_hints = _count_date_hits(combined_text) > 0
         has_good_score = first_score > 100
-        
+
         # Rotation-Fallback NUR wenn erste Rotation unzureichend
         if not has_date_hints or not has_good_score:
-            _LOGGER.info("date rotation fallback: roi score=%d, date_hits=%d; trying full-page ocr at 0°", 
+            _LOGGER.info("date rotation fallback: roi score=%d, date_hits=%d; trying full-page ocr at 0°",
                         first_score, _count_date_hits(combined_text))
             # Versuche erst Full-Page OCR bei 0° (kann better sein als ROI)
             try:
@@ -1687,13 +1695,13 @@ def extract_best_date(
                     has_good_score = True
             except (pytesseract.TesseractError, TimeoutError):
                 pass
-        
+
         # Falls IMMER NOCH keine Daten: Versuche Fallback-Rotationen
         if not has_date_hints or not has_good_score:
             _LOGGER.info("date rotation: still no success; trying 90° and 180°")
             candidates_log: List[Tuple[int, int, int]] = [(1, 0, first_score)]
             best_score = first_score
-            
+
             # 90/180/270 als Fallback testen (90° kann in beide Richtungen auftreten)
             fallback_rotations = [90, 180, 270]
             for rotation in fallback_rotations:
@@ -1710,12 +1718,12 @@ def extract_best_date(
                             has_date_hints = True
                 except (pytesseract.TesseractError, TimeoutError):
                     pass
-            
+
             if best_rotation != 0:
                 _LOGGER.info("date rotation selected=%d from %s", best_rotation, candidates_log)
         else:
             _LOGGER.info("date rotation 0° sufficient (first_score=%d)", first_score)
-        
+
         final_texts = combined_text.splitlines() if isinstance(combined_text, str) else [combined_text]
         if date_parser:
             dp_iso, dp_reason = date_parser.extract_date_from_text(combined_text)
@@ -1775,7 +1783,7 @@ def extract_best_date(
                         }
                     except ValueError:
                         pass
-            
+
             if full_text:
                 candidates = _extract_candidates_from_lines(full_text.splitlines(), "ocr_full", 0.60)
                 best = _select_best_candidate(candidates)
@@ -1985,11 +1993,11 @@ def _heuristic_supplier(text: str) -> Tuple[Optional[str], Optional[str], float]
         normalized_line = _normalize_supplier_text(line)
         if not normalized_line or any(term in normalized_line for term in blocked_terms):
             continue
-        
+
         # Empfänger-Blacklist prüfen (Franz Bracht etc.)
         if any(blacklisted in normalized_line for blacklisted in RECIPIENT_BLACKLIST):
             continue
-        
+
         tokens = set(normalized_line.split())
         score = 0.0
         # Endungen nur als ganze Wörter werten ("ag" soll nicht in "tag" matchen).
@@ -2044,7 +2052,7 @@ def detect_supplier_detailed(
     full_text_norm = _normalize_supplier_text(text)
     is_uebernahmeschein = (doc_type_hint or "").upper() == "ÜBERNAHMESCHEIN"
     has_ksr = "ksr" in full_text_norm or "ks-logistic" in full_text_norm or "ks logistic" in full_text_norm
-    
+
     if is_uebernahmeschein and has_ksr:
         # Return KSR sofort, ignoriere alle anderen Kandidaten
         return (
@@ -2128,7 +2136,7 @@ def detect_supplier_detailed(
 
     candidates.extend(_find_supplier_candidates_in_segment(header_text, "header"))
     candidates.extend(_find_supplier_candidates_in_segment(body_text, "body"))
-    
+
     # Initialisiere has_keyword_hit - wird später durch Hard-Fixes aktualisiert
     has_keyword_hit = any(c.get("source") in ["keywords", "db"] for c in candidates)
 
@@ -2189,7 +2197,7 @@ def detect_supplier_detailed(
         or "werk ehingen" in header_norm
         or "www.liebherr.com" in header_norm
     )
-    
+
     if liebherr_detected:
         candidates.insert(
             0,
@@ -2208,7 +2216,7 @@ def detect_supplier_detailed(
     # Hard Fix KSR: wenn in ÜBERNAHMESCHEIN und KSR im Text vorhanden
     # (entweder in Rollenblöcken oder als Keyword)
     ksr_detected_direct = ksr_detected_in_roles or ("ksr" in _normalize_supplier_text(header_text + "\n" + body_text))
-    
+
     if ksr_detected_direct and (doc_type_hint or "").upper() == "ÜBERNAHMESCHEIN":
         candidates.insert(
             0,
@@ -2443,6 +2451,9 @@ def _move_pdf_with_name(pdf_path: Path, output_dir: Path, filename: str) -> Tupl
 
 
 def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DATE_FORMAT) -> Dict[str, object]:
+    process_started = time.perf_counter()
+    render_duration_s = 0.0
+    ocr_duration_s = 0.0
     result: Dict[str, object] = {
         "supplier": "",
         "supplier_raw": "",
@@ -2470,6 +2481,9 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "doc_type_scores": {},
         "doc_type_evidence_by_type": {},
         "parsing_failed": False,
+        "timing_render_ms": "",
+        "timing_ocr_ms": "",
+        "timing_total_ms": "",
     }
 
     # 1) Zuerst Text-Layer versuchen (deutlich schneller als OCR)
@@ -2488,16 +2502,16 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         doc_type_hint = None
         if "uebernahmeschein" in textlayer_text.lower():
             doc_type_hint = "ÜBERNAHMESCHEIN"
-        
+
         s, c, src, guess, cands = detect_supplier_detailed(textlayer_text, doc_type_hint=doc_type_hint)
         supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
         supplier_candidates = cands or []
-        
+
         # Canonicalize supplier
         supplier_raw = supplier
         supplier_canonical = supplier
         supplier_matched_alias = ""
-        
+
         if canonicalize_supplier is not None and supplier and supplier != "Unbekannt":
             try:
                 match = canonicalize_supplier(supplier, textlayer_text)
@@ -2552,14 +2566,26 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     # - Datum im Textlayer fehlt
     # - oder Supplier im Textlayer sehr wahrscheinlich Empfänger/unsicher ist
     if not skip_ocr and ((not textlayer_text.strip()) or (not date_obj) or need_supplier_ocr):
+        render_started = time.perf_counter()
         images, render_error = _render_pdf_images(pdf_path, _POPPLER_BIN, pages=OCR_PAGES)
+        render_duration_s = time.perf_counter() - render_started
+        observe_pdf_render(render_duration_s)
+        observe_pipeline_step("pdf_render", render_duration_s)
         if render_error and not textlayer_err:
             # Nur melden, wenn nicht bereits textlayer Fehler
             result["error"] = render_error
             result["parsing_failed"] = True
-        
+            count_step_error("pdf_render", render_error)
+
         # VEREINFACHT: Kein force_best mehr - normale Rotation mit Fallback
-        ocr_result = _ocr_images_best(images or [], force_best=False) if images else {"text": "", "error": render_error or ""}
+        if images:
+            ocr_started = time.perf_counter()
+            ocr_result = _ocr_images_best(images, force_best=False)
+            ocr_duration_s = time.perf_counter() - ocr_started
+            observe_ocr(ocr_duration_s)
+            observe_pipeline_step("ocr", ocr_duration_s)
+        else:
+            ocr_result = {"text": "", "error": render_error or ""}
         if not ocr_result.get("error"):
             ocr_text = ocr_result.get("text", "")
             # Lieferantenerkennung per OCR:
@@ -2570,16 +2596,16 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                 doc_type_hint = None
                 if "uebernahmeschein" in ocr_text.lower():
                     doc_type_hint = "ÜBERNAHMESCHEIN"
-                
+
                 s, c, src, guess, cands = detect_supplier_detailed(ocr_text, doc_type_hint=doc_type_hint)
                 supplier, supplier_confidence, supplier_source, supplier_guess_line = s, c, src, guess
                 supplier_candidates = cands or []
-                
+
                 # Canonicalize supplier (OCR)
                 supplier_raw = supplier
                 supplier_canonical = supplier
                 supplier_matched_alias = ""
-                
+
                 if canonicalize_supplier is not None and supplier and supplier != "Unbekannt":
                     try:
                         combined_text = "\n".join([t for t in (textlayer_text, ocr_text) if t])
@@ -2594,11 +2620,13 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         result["ocr_rotation"] = ocr_result.get("rotation", "")
         result["ocr_rotation_reason"] = ocr_result.get("rotation_reason", "")
         result["rotate_hint"] = result["ocr_rotation"]
+        if ocr_result.get("error"):
+            count_step_error("ocr", ocr_result.get("error"))
         try:
             rotation_value = int(result["ocr_rotation"] or 0)
         except ValueError:
             rotation_value = 0
-        
+
         # Datum-Extraktion nur EINMAL mit OCR (nicht doppelt!)
         if not date_obj:
             # Nutze bereits gescannten OCR-Text statt erneut ROI-Scans
@@ -2613,7 +2641,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                             date_evidence = dp_reason
                         except ValueError:
                             pass
-                
+
                 # Fallback auf Regex wenn Parser nichts fand
                 if not date_obj:
                     candidates = _extract_candidates_from_lines(ocr_text.splitlines(), "ocr", 0.70)
@@ -2692,7 +2720,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         supplier_source = "none"
         supplier_guess_line = ""
         gibberish = True
-    
+
     # Stelle sicher dass supplier_raw und supplier_canonical gesetzt sind
     # (falls nicht schon durch Canonicalizer gesetzt)
     if 'supplier_raw' not in locals():
@@ -2701,7 +2729,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         supplier_canonical = supplier
     if 'supplier_matched_alias' not in locals():
         supplier_matched_alias = ""
-    
+
     result["supplier"] = supplier_canonical  # Nutze canonical name
     result["supplier_raw"] = supplier_raw
     result["supplier_canonical"] = supplier_canonical
@@ -2720,14 +2748,14 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     # Dokumentnummer: Supplier-spezifische Extraktion (neu)
     combined_text = "\n".join([t for t in (textlayer_text, ocr_text) if t])
-    
+
     # Dokumenttyp-Klassifikation (DocType)
     doc_type = "SONSTIGES"
     doc_type_confidence = 0.50
     doc_type_evidence = ""
     doc_type_scores: Dict[str, float] = {}
     doc_type_evidence_by_type: Dict[str, List[str]] = {}
-    
+
     if classify_doc_type is not None:
         try:
             doctype_result = classify_doc_type(combined_text, supplier_canonical)
@@ -2892,7 +2920,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                     supplier_source = "wm_recipient_blocked"
     except Exception:
         pass
-    
+
     result["doc_type"] = doc_type
     result["doc_type_confidence"] = f"{doc_type_confidence:.2f}"
     result["doc_type_evidence"] = doc_type_evidence
@@ -2907,12 +2935,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     # Kandidaten nach Coupling erneut kappen (damit role_block/override sichtbar bleibt)
     if supplier_candidates:
         result["supplier_candidates"] = list(supplier_candidates)[:3]
-    
+
     # Dokumentnummer: Supplier-spezifische Extraktion mit DocType
     doc_number = None
     doc_number_source = None
     doc_number_confidence = "none"
-    
+
     if extract_doc_number is not None:
         try:
             # Verwende supplier-spezifische Extraktion mit CANONICAL name + DocType
@@ -2923,7 +2951,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                 doc_number_confidence = doc_result.confidence
         except Exception as exc:
             _LOGGER.warning(f"doc_number extraction failed: {exc}")
-    
+
     # Fallback: alte Methode
     if not doc_number:
         numbers = extract_document_numbers(combined_text)
@@ -2931,7 +2959,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         if doc_number:
             doc_number_confidence = numbers.get("confidence", "medium")
             doc_number_source = "legacy_extraction"
-    
+
     # Wenn keine Nummer gefunden: ohneNr + Hash
     if not doc_number:
         if generate_fallback_identifier is not None:
@@ -2941,12 +2969,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
             doc_number = "ohneNr"
         doc_number_confidence = "none"
         doc_number_source = "fallback"
-    
+
     # Speichere in result dict
     result["doc_number"] = doc_number
     result["doc_number_source"] = doc_number_source or ""
     result["doc_number_confidence"] = doc_number_confidence
-    
+
     # Review-Status-Berechnung (Gate Check)
     if decide_review_status is not None and load_review_settings is not None:
         try:
@@ -2994,6 +3022,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         target_path, move_error = _move_pdf_with_name(pdf_path, output_dir, shortest_name)
     if not target_path:
         result["error"] = move_error
+        count_step_error("move_output", move_error or "move_failed")
+        total_s = time.perf_counter() - process_started
+        result["timing_render_ms"] = str(int(render_duration_s * 1000)) if render_duration_s > 0 else ""
+        result["timing_ocr_ms"] = str(int(ocr_duration_s * 1000)) if ocr_duration_s > 0 else ""
+        result["timing_total_ms"] = str(int(total_s * 1000))
+        observe_pipeline_step("process_pdf", total_s)
         return result
 
     result["out_name"] = target_path.name
@@ -3077,6 +3111,11 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
             "error": result.get("error", ""),
         }
     )
+    total_s = time.perf_counter() - process_started
+    result["timing_render_ms"] = str(int(render_duration_s * 1000)) if render_duration_s > 0 else ""
+    result["timing_ocr_ms"] = str(int(ocr_duration_s * 1000)) if ocr_duration_s > 0 else ""
+    result["timing_total_ms"] = str(int(total_s * 1000))
+    observe_pipeline_step("process_pdf", total_s)
     return result
 
 
@@ -3090,6 +3129,9 @@ def _append_log(log_path: Path, row: Dict[str, str]) -> None:
         "date_source",
         "status",
         "error",
+        "timing_render_ms",
+        "timing_ocr_ms",
+        "timing_total_ms",
         "tesseract_path",
         "poppler_bin",
     ]
@@ -3153,8 +3195,16 @@ def process_folder(
     log_path = BASE_DIR / "data" / "logs" / "run.csv"
 
     def _process_one(pdf_path: Path) -> Dict[str, str]:
+        started = time.perf_counter()
         result = process_pdf(pdf_path, output_dir, date_format=date_format)
+        elapsed = time.perf_counter() - started
+        observe_pipeline_step("process_pdf_end_to_end", elapsed)
         result["original"] = pdf_path.name
+        if (result.get("status") or "").lower() == "ok":
+            count_job("success")
+        else:
+            count_job("error")
+            count_step_error("process_pdf", result.get("error") or "processing_failed")
         _append_log(
             log_path,
             {
@@ -3166,6 +3216,9 @@ def process_folder(
                 "date_source": result.get("date_source", ""),
                 "status": result.get("status", ""),
                 "error": result.get("error", ""),
+                "timing_render_ms": result.get("timing_render_ms", ""),
+                "timing_ocr_ms": result.get("timing_ocr_ms", ""),
+                "timing_total_ms": result.get("timing_total_ms", ""),
                 "tesseract_path": result.get("tesseract_path", ""),
                 "poppler_bin": result.get("poppler_bin", ""),
             },
@@ -3178,43 +3231,81 @@ def process_folder(
         if p.is_file() and p.suffix.lower() == ".pdf"
     )
     total = len(pdf_files)
-    # Reduziere Parallelität auf 1 Worker für stabilere Performance
-    max_workers = 1
+    cpu_count = os.cpu_count() or 1
+    max_workers_env = int(os.getenv("DOCARO_PROCESS_MAX_WORKERS", "1") or "1")
+    max_workers = max(1, min(max_workers_env, cpu_count))
+    # Adaptive throttling under system load to avoid overload cascades.
+    if os.getenv("DOCARO_PROCESS_ADAPTIVE_WORKERS", "1") == "1":
+        try:
+            load1, _, _ = os.getloadavg()
+            if load1 > float(cpu_count) * 1.25:
+                max_workers = max(1, max_workers // 2)
+        except Exception:
+            pass
+    queue_multiplier = max(1, int(os.getenv("DOCARO_PROCESS_QUEUE_MULTIPLIER", "4") or "4"))
+    max_pending = max_workers * queue_multiplier
 
     done = 0
 
     timeout_seconds = int(os.getenv("DOCARO_FOLDER_TIMEOUT", "1800"))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="docaro-pdf") as executor:
-        future_to_pdf = {executor.submit(_process_one, p): p for p in pdf_files}
+        future_to_pdf: dict[concurrent.futures.Future, Path] = {}
+        submit_index = 0
+        while submit_index < len(pdf_files) and len(future_to_pdf) < max_pending:
+            pdf = pdf_files[submit_index]
+            future_to_pdf[executor.submit(_process_one, pdf)] = pdf
+            submit_index += 1
+        start_wait = time.perf_counter()
         try:
-            for future in concurrent.futures.as_completed(future_to_pdf, timeout=timeout_seconds):
-                pdf_path = future_to_pdf[future]
-                try:
-                    results.append(future.result())
-                except Exception as exc:
-                    _LOGGER.error(f"Error processing {pdf_path}: {exc}")
-                    results.append(
-                        {
-                            "original": pdf_path.name,
-                            "out_name": pdf_path.name,
-                            "supplier": "",
-                            "date": "",
-                            "status": "error",
-                            "error": f"processing_failed: {exc}",
-                            "parsing_failed": True,
-                        }
-                    )
-                finally:
-                    done += 1
-                    if progress_callback is not None:
-                        try:
-                            progress_callback(done, total, pdf_path.name)
-                        except Exception:
-                            pass
+            while future_to_pdf:
+                elapsed = time.perf_counter() - start_wait
+                remaining = max(0.0, timeout_seconds - elapsed)
+                if remaining <= 0:
+                    raise concurrent.futures.TimeoutError()
+
+                done_futures, _ = concurrent.futures.wait(
+                    set(future_to_pdf.keys()),
+                    timeout=remaining,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                if not done_futures:
+                    raise concurrent.futures.TimeoutError()
+
+                for future in done_futures:
+                    pdf_path = future_to_pdf.pop(future)
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        _LOGGER.error(f"Error processing {pdf_path}: {exc}")
+                        results.append(
+                            {
+                                "original": pdf_path.name,
+                                "out_name": pdf_path.name,
+                                "supplier": "",
+                                "date": "",
+                                "status": "error",
+                                "error": f"processing_failed: {exc}",
+                                "parsing_failed": True,
+                            }
+                        )
+                    finally:
+                        done += 1
+                        if progress_callback is not None:
+                            try:
+                                progress_callback(done, total, pdf_path.name)
+                            except Exception:
+                                pass
+
+                    if submit_index < len(pdf_files):
+                        next_pdf = pdf_files[submit_index]
+                        future_to_pdf[executor.submit(_process_one, next_pdf)] = next_pdf
+                        submit_index += 1
         except concurrent.futures.TimeoutError:
             # Mark remaining PDFs as failed so the job completes and the UI shows all entries.
-            pending = [p for f, p in future_to_pdf.items() if not f.done()]
+            for fut in list(future_to_pdf.keys()):
+                fut.cancel()
+            pending = list(future_to_pdf.values())
             for pdf_path in pending:
                 results.append(
                     {

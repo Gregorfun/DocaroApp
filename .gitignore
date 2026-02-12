@@ -23,11 +23,13 @@ data/quarantaene/
 data/logs/
 data/ml/
 data/mlflow/
+artifacts/
 data/audit.jsonl
 data/arbeitsordner/
 data/session_files.json
 data/settings.json
 data/*.lock
+data/runtime_state.db
 data/history.jsonl
 data/suppliers.json
 data/supplier_corrections.json

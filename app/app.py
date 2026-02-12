@@ -1,4 +1,5 @@
 ﻿from __future__ import annotations
+# ruff: noqa: E402
 
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -13,9 +14,6 @@ from uuid import uuid4
 from contextlib import contextmanager
 import time
 import shutil
-import secrets
-import logging
-import traceback
 
 import os
 
@@ -28,14 +26,11 @@ from flask import (
     render_template,
     request,
     send_file,
-    send_from_directory,
     session,
     url_for,
-    has_request_context,
 )
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
-import threading
 
 APP_DIR = Path(__file__).resolve().parent
 BASE_DIR = APP_DIR.parent
@@ -75,15 +70,24 @@ from redis import Redis
 from rq import Queue
 from services.auto_sort import (
     AutoSortSettings,
-    decide_auto_sort,
     export_document,
     load_settings as load_auto_sort_settings,
     save_settings as save_auto_sort_settings,
     sanitize_supplier_name,
 )
 from core.runtime_state import RuntimeStateConfig, reset_runtime_state, reset_runtime_state_once
+from core.runtime_store import RuntimeStore
+from app.runtime_storage import RuntimeStorageManager
+from app.queue_runtime import QueueRuntimeManager
 from services.web_auth import install_auth
 from core.performance import profile
+from core.metrics import (
+    count_step_error,
+    observe_pipeline_step,
+    set_inflight,
+    set_queue_depth,
+)
+from core.observability import init_sentry
 from functools import lru_cache
 import string
 
@@ -99,6 +103,7 @@ SESSION_FILES_PATH = config.SESSION_FILES_PATH
 SESSION_FILES_LOCK = config.SESSION_FILES_LOCK
 HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
+RUNTIME_DB_PATH = DATA_DIR / "runtime_state.db"
 
 # Download-Cleanup ("Refresh" nach Download)
 PRUNE_AFTER_DOWNLOAD = os.getenv("DOCARO_PRUNE_AFTER_DOWNLOAD", "1") == "1"
@@ -109,6 +114,7 @@ TMP_RETENTION_HOURS = int(os.getenv("DOCARO_TMP_RETENTION_HOURS", "48"))
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 redis_conn = Redis.from_url(redis_url)
 q = Queue('default', connection=redis_conn, default_timeout=3600)  # 1h timeout
+QUEUE_MAX_DEPTH = int(os.getenv("DOCARO_QUEUE_MAX_DEPTH", "200"))
 
 # Stateless (optional): Runtime-State beim Service-Start löschen.
 # WICHTIG: Unter Gunicorn laufen mehrere Worker-Prozesse; ein Reset pro Worker-Start
@@ -165,8 +171,14 @@ QUARANTINE_DATE_CONF_MIN = float(os.getenv("DOCARO_QUAR_DATE_MIN", "0.75"))
 # Auto-Sort Settings (persisted in data/settings.json)
 AUTO_SORT_SETTINGS: Optional[AutoSortSettings] = None
 
-# Session Files Cache (mtime-based)
-_session_cache = {"data": None, "mtime": 0}
+_runtime_store = RuntimeStore(
+    RUNTIME_DB_PATH,
+    session_files_path=SESSION_FILES_PATH,
+    supplier_corrections_path=SUPPLIER_CORRECTIONS_PATH,
+    history_path=HISTORY_PATH,
+)
+_runtime_storage_manager: Optional[RuntimeStorageManager] = None
+_queue_runtime_manager: Optional[QueueRuntimeManager] = None
 
 # Supplier Canonicalizer Cache
 _supplier_canonicalizer = None
@@ -284,14 +296,14 @@ def get_supplier_canonicalizer():
 def canonicalize_supplier_cached(supplier_name: str) -> tuple:
     """
     Cached Supplier Canonicalization.
-    
+
     Returns:
         (canonical_name, confidence) oder (supplier_name, 0) bei Fehler
     """
     canonicalizer = get_supplier_canonicalizer()
     if not canonicalizer:
         return (supplier_name, 0.0)
-    
+
     try:
         result = canonicalizer.canonicalize(supplier_name)
         return (result.canonical_name, result.confidence)
@@ -450,6 +462,7 @@ app.secret_key = config.SECRET_KEY
 # Zentrales Logging einrichten
 logger = config.setup_logging()
 app.logger = logger
+init_sentry("web")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config["DEBUG"] = DEBUG_MODE
@@ -471,6 +484,31 @@ except ImportError as e:
 seed_email = getattr(config, "SEED_EMAIL_DEFAULT", "g.machuletz@bracht-autokrane.de")
 seed_password = os.getenv("DOCARO_SEED_PASSWORD")
 install_auth(app, config.AUTH_DB_PATH, seed_email=seed_email, seed_password=seed_password)
+
+
+def _install_rq_dashboard() -> None:
+    if os.getenv("DOCARO_RQ_DASHBOARD_ENABLED", "1") != "1":
+        return
+    try:
+        import rq_dashboard  # type: ignore
+    except Exception as exc:
+        logger.warning("RQ Dashboard not available: %s", exc)
+        return
+
+    url_prefix = os.getenv("DOCARO_RQ_DASHBOARD_URL_PREFIX", "/rq").strip() or "/rq"
+    app.config.setdefault("RQ_DASHBOARD_REDIS_URL", redis_url)
+    app.config.setdefault("RQ_DASHBOARD_POLL_INTERVAL", 3000)
+    app.config.setdefault("RQ_DASHBOARD_PAGE_SIZE", 50)
+    app.config.setdefault("RQ_DASHBOARD_NO_DEFAULT_EXCEPTION_HANDLER", True)
+
+    try:
+        app.register_blueprint(rq_dashboard.blueprint, url_prefix=url_prefix)
+        logger.info("RQ Dashboard enabled at %s", url_prefix)
+    except Exception as exc:
+        logger.warning("RQ Dashboard registration failed: %s", exc)
+
+
+_install_rq_dashboard()
 
 
 
@@ -655,6 +693,7 @@ def _cleanup_after_download(*, sid: str, out_names: set[str], pdf_paths: list[Pa
 @app.get("/")
 def index():
     _check_processing_timeout()
+    _refresh_runtime_metrics()
     files = _list_finished()
     reset_done = request.args.get("reset") == "1"
     results = _load_last_results()
@@ -687,7 +726,7 @@ def index():
 @app.get("/settings")
 def settings_page():
     settings = _get_auto_sort_settings()
-    
+
     # Review Settings laden
     try:
         from core.review_service import load_review_settings
@@ -699,14 +738,14 @@ def settings_page():
         settings.gate_doc_number_min = review_settings.gate_doc_number_min
         settings.auto_finalize_enabled = review_settings.auto_finalize_enabled
     except Exception as exc:
-        _LOGGER.warning(f"Failed to load review settings: {exc}")
+        logger.warning(f"Failed to load review settings: {exc}")
         # Defaults
         settings.gate_supplier_min = 0.80
         settings.gate_date_min = 0.80
         settings.gate_doc_type_min = 0.70
         settings.gate_doc_number_min = 0.80
         settings.auto_finalize_enabled = False
-    
+
     return render_template("settings.html", settings=settings)
 
 
@@ -759,17 +798,17 @@ def settings_save():
         inbox_interval_minutes=inbox_interval_minutes,
     )
     _save_auto_sort_settings(settings)
-    
+
     # Review Queue Settings speichern
     try:
         from core.review_service import ReviewSettings, save_review_settings
-        
+
         auto_finalize_enabled = form.get("auto_finalize_enabled") == "1"
         gate_supplier_min = float(form.get("gate_supplier_min", "0.80"))
         gate_date_min = float(form.get("gate_date_min", "0.80"))
         gate_doc_type_min = float(form.get("gate_doc_type_min", "0.70"))
         gate_doc_number_min = float(form.get("gate_doc_number_min", "0.80"))
-        
+
         review_settings = ReviewSettings(
             gate_supplier_min=gate_supplier_min,
             gate_date_min=gate_date_min,
@@ -779,11 +818,11 @@ def settings_save():
             autosort_enabled=enabled,
             autosort_base_dir=base_dir
         )
-        
+
         save_review_settings(config.DATA_DIR / "settings.json", review_settings)
     except Exception as exc:
-        _LOGGER.warning(f"Failed to save review settings: {exc}")
-    
+        logger.warning(f"Failed to save review settings: {exc}")
+
     flash("Einstellungen gespeichert.")
     return redirect(url_for("settings_page"))
 
@@ -791,6 +830,7 @@ def settings_save():
 @app.get("/status.json")
 def status_json():
     try:
+        _refresh_runtime_metrics()
         progress = _load_progress()
         return jsonify({
             "ok": True,
@@ -812,15 +852,15 @@ def analyze_docling():
         "ok": False,
         "error": "Docling-Analyse vorübergehend deaktiviert (Server-Stabilitätsprobleme)"
     }), 503
-    
+
     import signal
     from contextlib import contextmanager
-    
+
     @contextmanager
     def timeout_context(seconds):
         def timeout_handler(signum, frame):
             raise TimeoutError(f"Docling-Analyse überschritt {seconds}s Timeout")
-        
+
         if hasattr(signal, 'SIGALRM'):
             old_handler = signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(seconds)
@@ -831,25 +871,25 @@ def analyze_docling():
                 signal.signal(signal.SIGALRM, old_handler)
         else:
             yield
-    
+
     try:
         if not is_docling_available():
             return jsonify({
                 "ok": False,
                 "error": "Docling ist nicht installiert. Installiere mit: pip install docling"
             }), 400
-        
+
         uploaded = request.files.getlist("files")
         if not uploaded:
             uploaded = request.files.getlist("files[]")
-        
+
         uploaded = [f for f in uploaded if getattr(f, "filename", None)]
         if not uploaded:
             return jsonify({
                 "ok": False,
                 "error": "Keine Dateien hochgeladen"
             }), 400
-        
+
         try:
             extractor = get_docling_extractor()
         except Exception as e:
@@ -858,23 +898,23 @@ def analyze_docling():
                 "ok": False,
                 "error": f"Docling nicht verfügbar: {str(e)}"
             }), 500
-        
+
         if not extractor:
             return jsonify({
                 "ok": False,
                 "error": "Docling Extractor konnte nicht initialisiert werden"
             }), 500
-        
+
         results = []
         TMP_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         for storage in uploaded:
             if not storage or not storage.filename:
                 continue
             safe_name = secure_filename(storage.filename)
             if not safe_name or not _allowed_file(safe_name):
                 continue
-            
+
             temp_path = TMP_DIR / f"docling_temp_{uuid4().hex}.pdf"
             try:
                 storage.save(temp_path)
@@ -885,7 +925,7 @@ def analyze_docling():
                     "error": f"Upload fehlgeschlagen: {str(e)}"
                 })
                 continue
-            
+
             try:
                 # Timeout für lange Docling-Verarbeitung
                 with timeout_context(30):
@@ -894,7 +934,7 @@ def analyze_docling():
                     tables = extractor.extract_tables(temp_path)
                     supplier = extractor.extract_supplier(temp_path)
                     date = extractor.extract_date(temp_path, supplier)
-                    
+
                     results.append({
                         "filename": safe_name,
                         "text": text[:500] + "..." if len(text) > 500 else text,
@@ -904,7 +944,7 @@ def analyze_docling():
                         "supplier": supplier,
                         "date": date.isoformat() if date else None,
                     })
-            except TimeoutError as e:
+            except TimeoutError:
                 logger.error(f"Timeout bei Docling-Analyse von {safe_name}")
                 results.append({
                     "filename": safe_name,
@@ -921,13 +961,13 @@ def analyze_docling():
                     temp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-        
+
         return jsonify({
             "ok": True,
             "results": results,
             "docling_available": True
         })
-    
+
     except Exception as exc:
         _log_exception("analyze_docling:handler", exc)
         return jsonify({
@@ -943,7 +983,7 @@ def docling_status_json():
         return jsonify({
             "ok": True,
             "docling_available": is_docling_available(),
-            "message": "Docling ist verfügbar" if is_docling_available() 
+            "message": "Docling ist verfügbar" if is_docling_available()
                       else "Docling nicht installiert - installiere mit: pip install docling"
         })
     except Exception as exc:
@@ -964,44 +1004,44 @@ def chunk_document():
                 "ok": False,
                 "error": "Docling ist nicht installiert"
             }), 400
-        
+
         uploaded = request.files.getlist("files")
         if not uploaded:
             uploaded = request.files.getlist("files[]")
-        
+
         uploaded = [f for f in uploaded if getattr(f, "filename", None)]
         if not uploaded:
             return jsonify({
                 "ok": False,
                 "error": "Keine Dateien hochgeladen"
             }), 400
-        
+
         max_tokens = int(request.form.get("max_tokens", 512))
         tokenizer = request.form.get("tokenizer", "sentence")
-        
+
         extractor = get_docling_extractor()
         if not extractor:
             return jsonify({
                 "ok": False,
                 "error": "Docling Extractor konnte nicht initialisiert werden"
             }), 500
-        
+
         results = []
         TMP_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         for storage in uploaded[:1]:  # Nur erste Datei für Demo
             if not storage or not storage.filename:
                 continue
             safe_name = secure_filename(storage.filename)
             if not safe_name or not _allowed_file(safe_name):
                 continue
-            
+
             temp_path = TMP_DIR / f"chunk_temp_{uuid4().hex}.pdf"
             storage.save(temp_path)
-            
+
             try:
                 chunks = extractor.chunk_document(temp_path, tokenizer=tokenizer, max_tokens=max_tokens)
-                
+
                 results.append({
                     "filename": safe_name,
                     "num_chunks": len(chunks),
@@ -1020,12 +1060,12 @@ def chunk_document():
                     temp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-        
+
         return jsonify({
             "ok": True,
             "results": results
         })
-    
+
     except Exception as exc:
         _log_exception("chunk_document:handler", exc)
         return jsonify({
@@ -1163,6 +1203,52 @@ def _get_session_id() -> str:
     return sid
 
 
+def _storage_manager() -> RuntimeStorageManager:
+    global _runtime_storage_manager
+    if _runtime_storage_manager is None:
+        _runtime_storage_manager = RuntimeStorageManager(
+            runtime_store=_runtime_store,
+            get_session_id=_get_session_id,
+            report_error=count_step_error,
+            log_retention_days=LOG_RETENTION_DAYS,
+        )
+    return _runtime_storage_manager
+
+
+def _queue_manager() -> QueueRuntimeManager:
+    global _queue_runtime_manager
+    if _queue_runtime_manager is None:
+        _queue_runtime_manager = QueueRuntimeManager(
+            q=q,
+            queue_max_depth=QUEUE_MAX_DEPTH,
+            default_inbox_dir=INBOX_DIR,
+            out_dir=OUT_DIR,
+            quarantine_dir=QUARANTINE_DIR,
+            refresh_runtime_metrics=_refresh_runtime_metrics,
+            is_processing=_is_processing,
+            set_progress=_set_progress,
+            set_processing=_set_processing,
+            get_auto_sort_settings=_get_auto_sort_settings,
+            resolve_inbox_dir=_resolve_inbox_dir,
+            looks_like_windows_drive_path=_looks_like_windows_drive_path,
+            windows_path_not_supported_message=_windows_path_not_supported_on_linux_message,
+            normalize_date_fmt=_normalize_date_fmt,
+            process_folder=process_folder,
+            clear_pdfs=_clear_pdfs,
+            apply_result_flags=_apply_result_flags,
+            apply_quarantine=_apply_quarantine,
+            merge_last_results=_merge_last_results,
+            clear_progress=_clear_progress,
+            processing_flag_path=_processing_flag_path,
+            get_unique_path=get_unique_path,
+            observe_pipeline_step=observe_pipeline_step,
+            set_inflight=set_inflight,
+            count_step_error=count_step_error,
+            log_exception=_log_exception,
+        )
+    return _queue_runtime_manager
+
+
 def _session_results_path() -> Path:
     # Verwende globale Ergebnisdatei, um Session-Mismatches zu vermeiden
     return TMP_DIR / "last_results.json"
@@ -1230,6 +1316,17 @@ def _is_processing() -> bool:
     except OSError:
         return False
 
+
+def _refresh_runtime_metrics() -> None:
+    try:
+        set_queue_depth("default", int(q.count))
+    except Exception as exc:
+        count_step_error("queue_depth", exc)
+    try:
+        set_inflight("web_processing", 1 if _is_processing() else 0)
+    except Exception:
+        pass
+
 def background_process_upload(upload_dir: Path, date_fmt: str) -> None:
     background_process_folder(upload_dir, date_fmt=date_fmt, cleanup_input_dir=True, log_context="upload:bg_worker")
 
@@ -1237,41 +1334,22 @@ def background_process_upload(upload_dir: Path, date_fmt: str) -> None:
 @app.post("/process_inbox")
 def process_inbox():
     try:
-        if _is_processing():
-            flash("Es läuft bereits eine Verarbeitung.")
+        decision = _queue_manager().evaluate_inbox_request(request.form.get("date_fmt", ""))
+        if not decision.proceed:
+            flash(decision.flash_message)
             return redirect(url_for("index"))
-
-        settings = _get_auto_sort_settings()
-        inbox_dir_raw = getattr(settings, "inbox_dir", INBOX_DIR)
-        inbox_dir_raw_str = str(inbox_dir_raw)
-        if os.name != "nt" and _looks_like_windows_drive_path(inbox_dir_raw_str):
-            flash(_windows_path_not_supported_on_linux_message(inbox_dir_raw_str))
-            return redirect(url_for("index"))
-        inbox_dir = _resolve_inbox_dir(inbox_dir_raw)
-        inbox_dir.mkdir(parents=True, exist_ok=True)
-        pdfs = sorted(
-            p
-            for p in inbox_dir.iterdir()
-            if p.is_file() and p.suffix.lower() == ".pdf"
-        )
-        if not pdfs:
-            flash(f"Keine PDFs in {inbox_dir} gefunden.")
-            return redirect(url_for("index"))
-
-        date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
-
-        _set_progress(total=len(pdfs), done=0)
-        _set_processing(True)
         q.enqueue(
             background_process_folder,
-            args=(inbox_dir, date_fmt),
+            args=(decision.inbox_dir, decision.date_fmt),
             kwargs={"cleanup_input_dir": False, "log_context": "inbox:bg_worker"},
-            job_timeout='1h',
-            result_ttl=86400
+            job_timeout="1h",
+            result_ttl=86400,
         )
+        _refresh_runtime_metrics()
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("inbox:handler", exc)
+        count_step_error("process_inbox", exc)
         _set_processing(False)
         raise
 
@@ -1283,60 +1361,12 @@ def background_process_folder(
     cleanup_input_dir: bool = False,
     log_context: str = "bg_worker",
 ) -> None:
-    try:
-        def _progress_cb(done: int, total: int, filename: str) -> None:
-            _set_progress(total=total, done=done, current_file=filename)
-
-        results = process_folder(input_dir, OUT_DIR, date_format=date_fmt, progress_callback=_progress_cb)
-        # Fehlgeschlagene PDFs in Quarantäne verschieben und sichtbar halten
-        if results:
-            try:
-                QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                QUARANTINE_DIR  # noop for linting
-            for item in results:
-                if not item.get("parsing_failed") and not item.get("error"):
-                    continue
-                original = (item.get("original") or item.get("out_name") or "").strip()
-                if not original:
-                    continue
-                src = input_dir / original
-                if not src.exists():
-                    continue
-                target = get_unique_path(QUARANTINE_DIR, src.name)
-                try:
-                    src.replace(target)
-                except OSError:
-                    try:
-                        shutil.copy2(src, target)
-                        try:
-                            src.unlink()
-                        except OSError:
-                            pass
-                    except OSError:
-                        continue
-                item["out_name"] = target.name
-                item["export_path"] = str(target)
-                item["quarantined"] = "1"
-                item["quarantine_reason"] = "processing_failed"
-        if cleanup_input_dir:
-            _clear_pdfs(input_dir)
-        # WICHTIG: Keine Session-Zugriffe im Hintergrund-Thread!
-        # IDs und Session-Mapping werden in der Index-Route gesetzt.
-        results = _apply_result_flags(results)
-        results = _apply_quarantine(results)
-
-        _merge_last_results(results)
-    except Exception as exc:
-        _log_exception(log_context, exc)
-    finally:
-        try:
-            flag = _processing_flag_path()
-            if flag.exists():
-                flag.unlink()
-        except OSError:
-            pass
-        _clear_progress()
+    _queue_manager().background_process_folder(
+        input_dir=input_dir,
+        date_fmt=date_fmt,
+        cleanup_input_dir=cleanup_input_dir,
+        log_context=log_context,
+    )
 
 
 def _save_last_results(results) -> None:
@@ -1428,111 +1458,43 @@ def _load_last_results():
 
 
 def _load_session_files() -> dict:
-    """Lädt session_files.json mit mtime-basiertem Cache."""
-    global _session_cache
-    
-    if not SESSION_FILES_PATH.exists():
-        return {}
-    
-    # Cache-Check: Nur neu laden wenn Datei geändert
-    try:
-        mtime = SESSION_FILES_PATH.stat().st_mtime
-        if _session_cache["mtime"] == mtime and _session_cache["data"] is not None:
-            return _session_cache["data"]
-    except OSError:
-        pass
-    
-    # Neu laden
-    with _locked_file(SESSION_FILES_LOCK, mode="a+"):
-        try:
-            data = json.loads(SESSION_FILES_PATH.read_text(encoding="utf-8"))
-            # Cache aktualisieren
-            _session_cache["data"] = data
-            _session_cache["mtime"] = SESSION_FILES_PATH.stat().st_mtime
-            return data
-        except json.JSONDecodeError:
-            return {}
+    return _storage_manager().load_session_files()
 
 
 def _save_session_files(data: dict) -> None:
-    """Speichert session_files.json und invalidiert Cache."""
-    global _session_cache
-    
-    SESSION_FILES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(data, indent=2)
-    with _locked_file(SESSION_FILES_LOCK, mode="a+"):
-        tmp_path = SESSION_FILES_PATH.with_suffix(".json.tmp")
-        tmp_path.write_text(payload, encoding="utf-8")
-        tmp_path.replace(SESSION_FILES_PATH)
-    
-    # Cache invalidieren (wird beim nächsten Load neu geladen)
-    _session_cache["mtime"] = 0
+    _storage_manager().save_session_files(data)
 
 
 def _get_session_file_map() -> dict:
-    data = _load_session_files()
-    sid = _get_session_id()
-    return data.get(sid, {})
+    return _storage_manager().get_session_file_map()
 
 
 def _set_session_file_entry(file_id: str, path: Path, filename: str) -> None:
-    data = _load_session_files()
-    sid = _get_session_id()
-    session_map = data.setdefault(sid, {})
-    session_map[file_id] = {"path": str(path), "filename": filename}
-    _save_session_files(data)
+    _storage_manager().set_session_file_entry(file_id, str(path), filename)
 
 
 def _remove_session_files() -> None:
-    data = _load_session_files()
-    sid = _get_session_id()
-    if sid in data:
-        data.pop(sid, None)
-        _save_session_files(data)
+    _storage_manager().remove_session_files()
 
 
 def _append_history(entry: dict) -> None:
-    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with HISTORY_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
-    _trim_history()
+    _storage_manager().append_history(entry)
 
 
 def _load_supplier_corrections() -> dict:
-    if not SUPPLIER_CORRECTIONS_PATH.exists():
-        return {}
-    try:
-        return json.loads(SUPPLIER_CORRECTIONS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    return _storage_manager().load_supplier_corrections()
 
 
 def _save_supplier_corrections(data: dict) -> None:
-    SUPPLIER_CORRECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SUPPLIER_CORRECTIONS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _storage_manager().save_supplier_corrections(data)
 
 
 def _load_history_entries() -> list:
-    if not HISTORY_PATH.exists():
-        return []
-    entries = []
-    for line in HISTORY_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return entries
+    return _storage_manager().load_history_entries()
 
 
 def _latest_history_entry() -> Optional[dict]:
-    entries = _load_history_entries()
-    for entry in reversed(entries):
-        if entry.get("action_type") != "undo":
-            return entry
-    return None
+    return _storage_manager().latest_history_entry()
 
 
 def _is_date_missing(date_valAe: Optional[str], parsing_failed: bool = False) -> bool:
@@ -2266,27 +2228,7 @@ def _apply_supplier_corrections(results):
 
 
 def _trim_history() -> None:
-    if not HISTORY_PATH.exists():
-        return
-    cutoff = datetime.now() - timedelta(days=max(LOG_RETENTION_DAYS, 1))
-    kept = []
-    for line in HISTORY_PATH.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        ts = entry.get("timestamp") or ""
-        try:
-            ts_dt = datetime.fromisoformat(ts)
-        except ValueError:
-            kept.append(entry)
-            continue
-        if ts_dt >= cutoff:
-            kept.append(entry)
-    payload = "\n".join(json.dumps(entry, ensure_ascii=True) for entry in kept)
-    HISTORY_PATH.write_text((payload + "\n") if payload else "", encoding="utf-8")
+    _storage_manager().trim_history()
 
 
 def _rename_pdf_with_name(pdf_path: Path, filename: str) -> Tuple[Optional[Path], str]:
@@ -3555,7 +3497,7 @@ def download(filename: str):
         # Prüfe ob Auto-Sort bereits erfolgreich war
         export_path_val = (result.get("export_path") or "").strip()
         already_sorted = export_path_val and Path(export_path_val).exists()
-        
+
         if not already_sorted:
             # Auto-Sort nachholen
             try:
@@ -3563,7 +3505,7 @@ def download(filename: str):
                 pdf_path, auto_status, auto_reason = _auto_sort_pdf(result, pdf_path)
             except Exception as exc:
                 logger.warning(f"Auto-sort on download failed for {safe_name}: {exc}")
-    
+
     if file_id and pdf_path:
         _set_session_file_entry(file_id, pdf_path, pdf_path.name)
     download_name = pdf_path.name if pdf_path else safe_name
@@ -3606,7 +3548,7 @@ def pdf_thumbnail(file_id: str):
     try:
         from pdf2image import convert_from_path
         from io import BytesIO
-        
+
         # Rendere nur die erste Seite. Für Zoom kann eine höhere DPI gewählt werden.
         dpi = 100 if size == "sm" else 200
         try:
@@ -3639,7 +3581,7 @@ def download_all():
     filenames = sorted(_session_filenames())
     if not filenames:
         abort(404)
-    
+
     # Auto-Sort vor dem Download für alle Dateien
     settings = _get_auto_sort_settings()
     results = _load_last_results() or []
@@ -3650,11 +3592,11 @@ def download_all():
             out_name = item.get("out_name") or ""
             if not out_name or out_name not in filenames:
                 continue
-            
+
             # Prüfe ob Auto-Sort bereits erfolgreich war
             export_path_val = (item.get("export_path") or "").strip()
             already_sorted = export_path_val and Path(export_path_val).exists()
-            
+
             if not already_sorted:
                 # Auto-Sort nachholen
                 pdf_path = resolve_pdf_path(out_name)
@@ -3668,7 +3610,7 @@ def download_all():
         # Results können durch _auto_sort_pdf (export_path) aktualisiert worden sein.
         # Für die ZIP-Erstellung laden wir deshalb den neuesten Stand erneut.
         results = _load_last_results() or []
-    
+
     pdfs = []
     results_by_out_name = {str(item.get("out_name") or "").strip(): item for item in (results or [])}
     for name in filenames:
@@ -3798,26 +3740,26 @@ def get_stats():
                         history_data.append(json.loads(line.strip()))
                     except json.JSONDecodeError:
                         continue
-        
+
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = now - timedelta(days=7)
-        
+
         # Zähle Dokumente
         total_count = len(history_data)
-        today_count = sum(1 for h in history_data 
+        today_count = sum(1 for h in history_data
                          if datetime.fromisoformat(h.get('timestamp', '1970-01-01')) >= today_start)
-        week_count = sum(1 for h in history_data 
+        week_count = sum(1 for h in history_data
                         if datetime.fromisoformat(h.get('timestamp', '1970-01-01')) >= week_start)
-        
+
         # Berechne durchschnittliche Verarbeitungszeit (falls vorhanden)
         processing_times = [h.get('processing_time', 0) for h in history_data if h.get('processing_time', 0) > 0]
         avg_time = sum(processing_times) / len(processing_times) if processing_times else 3.2
-        
+
         # Erfolgsrate (Dokumente ohne Fehler)
         success_count = sum(1 for h in history_data if not h.get('error'))
         success_rate = round((success_count / total_count * 100) if total_count > 0 else 95, 1)
-        
+
         return jsonify({
             'totalCount': total_count,
             'todayCount': today_count,
