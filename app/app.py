@@ -1854,6 +1854,17 @@ def _safe_pdf_name(filename: str) -> str:
 
 def _normalize_supplier_input(valAe: str) -> str:
     cleaned = (valAe or "").strip()
+    # Umlaute/ß konsistent transliterieren statt zu verlieren.
+    # Sonst werden z.B. "Läschen" -> "Lschen".
+    cleaned = (
+        cleaned.replace("ß", "ss")
+        .replace("Ä", "Ae")
+        .replace("Ö", "Oe")
+        .replace("Ü", "Ue")
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+    )
     cleaned = re.sub(r"\s+", " ", cleaned)
     cleaned = re.sub(r"[^a-zA-Z0-9 ._&-]+", "", cleaned)
     cleaned = cleaned.strip("._- ")
