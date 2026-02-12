@@ -3085,6 +3085,17 @@ def confirm_all_from_view():
 
     # Results persistieren (setzt manual_reviewed=1 und recalculates quarantine)
     _update_last_results(file_id, supplier_name or "Unbekannt", new_name=filename_after)
+
+    # Wichtig: supplier_corrections persistieren, sonst überschreibt
+    # _apply_supplier_corrections() beim nächsten Laden wieder den alten Wert.
+    try:
+        if supplier_name and supplier_name != "Unbekannt":
+            corrections = _load_supplier_corrections()
+            corrections[file_id] = supplier_name
+            _save_supplier_corrections(corrections)
+    except Exception as exc:
+        logger.warning(f"Supplier corrections update in confirm_all_from_view failed: {exc}")
+
     if date_iso:
         _update_last_results_date(file_id, filename_after, date_iso)
     _update_last_results_doc_number(file_id, filename_after, doc_number)
