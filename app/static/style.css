@@ -237,7 +237,7 @@ html.dark-mode .action-select {
 
 .action-date-details.is-compact .action-summary {
   font-size: 0.9rem;
-  color: var(--muted);
+  color: var(--accent);
 }
 
 .action-date-details.is-compact .action-form {

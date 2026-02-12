@@ -218,6 +218,26 @@ class DocTypeClassifier:
         Returns:
             DocTypeResult mit doc_type, confidence, evidence
         """
+        supplier_norm = (supplier_canonical or "").strip().upper()
+        if supplier_norm in {"WM", "WM SE", "WMSE"}:
+            scores: Dict[str, float] = {
+                self.DOCTYPE_RECHNUNG: 0.0,
+                self.DOCTYPE_LIEFERSCHEIN: 1.0,
+                self.DOCTYPE_UEBERNAHMESCHEIN: 0.0,
+                self.DOCTYPE_KOMMISSIONIERLISTE: 0.0,
+                self.DOCTYPE_PRUEFBERICHT: 0.0,
+            }
+            evidence_by_type: Dict[str, List[str]] = {
+                self.DOCTYPE_LIEFERSCHEIN: ["supplier_hint:WM"],
+            }
+            return DocTypeResult(
+                doc_type=self.DOCTYPE_LIEFERSCHEIN,
+                confidence=0.99,
+                evidence=["supplier_hint:WM"],
+                scores=scores,
+                evidence_by_type=evidence_by_type,
+            )
+
         segments = segment_header_body_footer(text, header_lines=35, footer_lines=35)
         header_text = "\n".join(segments.header_lines)
         body_text = "\n".join(segments.body_lines)

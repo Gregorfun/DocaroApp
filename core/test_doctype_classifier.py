@@ -79,6 +79,20 @@ def test_uebernahmeschein():
     assert result.confidence >= 0.70, f"Confidence too low: {result.confidence}"
 
 
+def test_wm_is_always_lieferschein():
+    text = """
+    ÜBERNAHMESCHEIN
+    Entsorgungsnachweis
+
+    Lieferschein-Nr: WM-123
+    Lieferdatum: 10.02.2026
+    """
+    result = classify_doc_type(text, supplier_canonical="WM")
+    print(f"✓ WM override: doc_type={result.doc_type}, confidence={result.confidence:.2f}, evidence={result.evidence}")
+    assert result.doc_type == "LIEFERSCHEIN", f"Expected LIEFERSCHEIN for WM, got {result.doc_type}"
+    assert result.confidence >= 0.90, f"Confidence too low: {result.confidence}"
+
+
 def test_kommissionierliste():
     """Test für KOMMISSIONIERLISTE-Klassifikation."""
     text = """
