@@ -2733,6 +2733,66 @@ def confirm_review_state():
     return redirect(url_for("index"))
 
 
+@app.post("/delete_pdf")
+def delete_pdf():
+    """Löscht eine einzelne PDF aus der Ergebnisliste (und von Disk)."""
+    file_id = (request.form.get("file_id", "") or "").strip()
+    if not file_id:
+        abort(404)
+
+    result = _result_for_file_id(file_id) or {}
+    filename = (result.get("out_name") or "").strip()
+
+    pdf_path = _resolve_file_path(file_id) or resolve_pdf_path(filename)
+    if not pdf_path or not str(pdf_path):
+        flash("Datei nicht gefunden.")
+        return redirect(url_for("index"))
+
+    # Safety: nur PDFs und nur innerhalb erlaubter Roots löschen
+    if pdf_path.suffix.lower() != ".pdf":
+        flash("Ungültige Datei.")
+        return redirect(url_for("index"))
+
+    allowed_roots: list[Path] = [OUT_DIR, QUARANTINE_DIR]
+    try:
+        settings = _get_auto_sort_settings()
+        base_dir_raw = str(getattr(settings, "base_dir", "") or "").strip()
+        if settings.enabled and base_dir_raw:
+            allowed_roots.append(Path(base_dir_raw))
+    except Exception:
+        pass
+
+    if not any(_is_path_within(pdf_path, root) for root in allowed_roots if root):
+        flash("Löschen nicht erlaubt.")
+        return redirect(url_for("index"))
+
+    _safe_unlink(pdf_path)
+
+    # Ergebnis entfernen
+    results = _load_last_results() or []
+    new_results = [item for item in results if item.get("file_id") != file_id]
+    if len(new_results) != len(results):
+        _save_last_results(new_results)
+
+    # Corrections aufräumen (damit alte Werte nicht bleiben)
+    try:
+        corrections = _load_supplier_corrections()
+        if file_id in corrections:
+            corrections.pop(file_id, None)
+            _save_supplier_corrections(corrections)
+    except Exception:
+        pass
+
+    # Session mapping best-effort entfernen
+    try:
+        _remove_session_entries_for_sid(_get_session_id(), file_ids={file_id}, filenames={filename} if filename else None)
+    except Exception:
+        pass
+
+    flash("PDF gelöscht.")
+    return redirect(url_for("index"))
+
+
 @app.post("/confirm_doc_number")
 def confirm_doc_number():
     file_id = request.form.get("file_id", "").strip()

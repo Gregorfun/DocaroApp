@@ -265,7 +265,7 @@
                         {% endif %}
                       </span>
                     </div>
-                    <div class="result-action-field">
+                    <div class="result-action-field result-action-field--status">
                       <details class="action-details" data-doc-id="{{ item.file_id or '' }}" data-edit-kind="review_state">
                         <summary class="action-summary">Status bearbeiten</summary>
                         <form action="{{ url_for('confirm_review_state') }}" method="post" class="inline-form action-form" data-ajax="1">
@@ -281,6 +281,13 @@
                           </div>
                         </form>
                       </details>
+
+                      {% if item.file_id %}
+                        <form action="{{ url_for('delete_pdf') }}" method="post" class="delete-pdf-form">
+                          <input type="hidden" name="file_id" value="{{ item.file_id }}" />
+                          <button type="submit" class="action-button danger delete-pdf-button">Löschen</button>
+                        </form>
+                      {% endif %}
                     </div>
                   </div>
                 </div>

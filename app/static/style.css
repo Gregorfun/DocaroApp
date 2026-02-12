@@ -327,6 +327,27 @@ html.dark-mode .result-card {
   justify-content: flex-end;
 }
 
+.result-action-field--status {
+  position: relative;
+}
+
+.result-action-field--status .action-details {
+  padding-right: 110px;
+}
+
+.delete-pdf-form {
+  position: absolute;
+  top: 0;
+  right: 0;
+  margin: 0;
+}
+
+button.delete-pdf-button {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  width: auto;
+}
+
 .action-buttons-inline {
   display: flex;
   gap: 8px;
