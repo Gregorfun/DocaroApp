@@ -55,7 +55,7 @@ def install_auth(
         session.clear()
         return redirect(url_for("login_page"))
 
-    public_endpoints = {"login_page", "login_submit", "health", "static"}
+    public_endpoints = {"login_page", "login_submit", "health", "metrics_endpoint", "static"}
 
     @app.before_request
     def _require_auth():

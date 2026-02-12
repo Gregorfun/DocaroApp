@@ -61,6 +61,19 @@ class RuntimeStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_fingerprints (
+                    sha256 TEXT PRIMARY KEY,
+                    first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    original_name TEXT NOT NULL DEFAULT '',
+                    last_path TEXT NOT NULL DEFAULT '',
+                    last_file_id TEXT NOT NULL DEFAULT '',
+                    seen_count INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
             conn.commit()
 
     def _upsert_kv(self, key: str, value: Any) -> None:
@@ -210,4 +223,80 @@ class RuntimeStore:
             else:
                 placeholders = ",".join("?" for _ in keep_ids)
                 conn.execute(f"DELETE FROM history_events WHERE id NOT IN ({placeholders})", tuple(keep_ids))
+            conn.commit()
+
+    def health_check(self) -> dict[str, object]:
+        with self._connect() as conn:
+            quick = conn.execute("PRAGMA quick_check").fetchone()
+            wal_mode = conn.execute("PRAGMA journal_mode").fetchone()
+        quick_value = str(quick[0] if quick else "unknown")
+        mode_value = str(wal_mode[0] if wal_mode else "unknown")
+        ok = quick_value.lower() == "ok"
+        if not ok:
+            _LOGGER.warning("RuntimeStore health check failed: quick_check=%s", quick_value)
+        return {"ok": ok, "quick_check": quick_value, "journal_mode": mode_value}
+
+    def checkpoint_wal(self, truncate: bool = False) -> dict[str, int]:
+        command = "TRUNCATE" if truncate else "PASSIVE"
+        with self._connect() as conn:
+            row = conn.execute(f"PRAGMA wal_checkpoint({command})").fetchone()
+        if not row:
+            return {"busy": 0, "log": 0, "checkpointed": 0}
+        # SQLite returns (busy, log, checkpointed)
+        return {
+            "busy": int(row[0] or 0),
+            "log": int(row[1] or 0),
+            "checkpointed": int(row[2] or 0),
+        }
+
+    def get_document_fingerprint(self, sha256: str) -> dict[str, Any] | None:
+        key = str(sha256 or "").strip().lower()
+        if not key:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT sha256, first_seen_at, last_seen_at, original_name, last_path, last_file_id, seen_count
+                FROM document_fingerprints
+                WHERE sha256 = ?
+                """,
+                (key,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "sha256": str(row["sha256"]),
+            "first_seen_at": str(row["first_seen_at"]),
+            "last_seen_at": str(row["last_seen_at"]),
+            "original_name": str(row["original_name"] or ""),
+            "last_path": str(row["last_path"] or ""),
+            "last_file_id": str(row["last_file_id"] or ""),
+            "seen_count": int(row["seen_count"] or 0),
+        }
+
+    def register_document_fingerprint(self, sha256: str, *, original_name: str, path: str, file_id: str) -> None:
+        key = str(sha256 or "").strip().lower()
+        if not key:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO document_fingerprints(
+                    sha256, original_name, last_path, last_file_id, first_seen_at, last_seen_at, seen_count
+                )
+                VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 1)
+                ON CONFLICT(sha256) DO UPDATE SET
+                    last_seen_at = datetime('now'),
+                    original_name = excluded.original_name,
+                    last_path = excluded.last_path,
+                    last_file_id = excluded.last_file_id,
+                    seen_count = document_fingerprints.seen_count + 1
+                """,
+                (
+                    key,
+                    str(original_name or ""),
+                    str(path or ""),
+                    str(file_id or ""),
+                ),
+            )
             conn.commit()

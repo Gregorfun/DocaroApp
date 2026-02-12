@@ -5,20 +5,26 @@ from io import BytesIO
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 import sys
 import atexit
 import zipfile
 import json
 import re
+import hmac
+import hashlib
+import secrets
 from uuid import uuid4
 from contextlib import contextmanager
 import time
 import shutil
+import threading
 
 import os
 
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     jsonify,
@@ -27,6 +33,7 @@ from flask import (
     request,
     send_file,
     session,
+    stream_with_context,
     url_for,
 )
 from werkzeug.utils import secure_filename
@@ -87,6 +94,12 @@ from core.metrics import (
     set_inflight,
     set_queue_depth,
 )
+from core.document_intelligence import (
+    apply_supplier_profile,
+    compute_review_priority,
+    derive_processing_route,
+    load_supplier_profiles,
+)
 from core.observability import init_sentry
 from functools import lru_cache
 import string
@@ -104,6 +117,7 @@ SESSION_FILES_LOCK = config.SESSION_FILES_LOCK
 HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 RUNTIME_DB_PATH = DATA_DIR / "runtime_state.db"
+SUPPLIER_PROFILES_PATH = BASE_DIR / "config" / "supplier_profiles.json"
 
 # Download-Cleanup ("Refresh" nach Download)
 PRUNE_AFTER_DOWNLOAD = os.getenv("DOCARO_PRUNE_AFTER_DOWNLOAD", "1") == "1"
@@ -179,6 +193,11 @@ _runtime_store = RuntimeStore(
 )
 _runtime_storage_manager: Optional[RuntimeStorageManager] = None
 _queue_runtime_manager: Optional[QueueRuntimeManager] = None
+_rate_limit_memory: dict[str, tuple[int, float]] = {}
+_rate_limit_lock = threading.Lock()
+_last_runtime_store_health_check = 0.0
+_last_runtime_store_checkpoint = 0.0
+_supplier_profiles_cache: dict[str, object] = {"mtime": 0.0, "data": {}}
 
 # Supplier Canonicalizer Cache
 _supplier_canonicalizer = None
@@ -517,10 +536,151 @@ def _log_exception(context: str, exc: Exception) -> None:
     logger.exception(f"Exception in {context}: {exc}")
 
 
+def _parse_limit_config(raw: str, default_limit: int, default_window: int) -> tuple[int, int]:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return default_limit, default_window
+    m = re.match(r"^\s*(\d+)\s*/\s*(\d+)\s*([smh]?)\s*$", value)
+    if not m:
+        return default_limit, default_window
+    limit = max(int(m.group(1)), 1)
+    window = max(int(m.group(2)), 1)
+    suffix = (m.group(3) or "s").lower()
+    scale = {"s": 1, "m": 60, "h": 3600}.get(suffix, 1)
+    return limit, window * scale
+
+
+def _client_ip() -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return (request.remote_addr or "unknown").strip() or "unknown"
+
+
+def _rate_limit_check(scope: str, raw_rule: str, default_limit: int, default_window: int) -> tuple[bool, int]:
+    limit, window_seconds = _parse_limit_config(raw_rule, default_limit, default_window)
+    key = f"ratelimit:{scope}:{_client_ip()}"
+    now = time.time()
+
+    # Redis first for multi-process consistency.
+    try:
+        current = int(redis_conn.incr(key))
+        if current == 1:
+            redis_conn.expire(key, int(window_seconds))
+        ttl = int(redis_conn.ttl(key) or window_seconds)
+        return current > limit, max(ttl, 1)
+    except Exception:
+        pass
+
+    # Fallback: in-memory (single-process best effort).
+    with _rate_limit_lock:
+        current, reset_at = _rate_limit_memory.get(key, (0, now + window_seconds))
+        if now >= reset_at:
+            current = 0
+            reset_at = now + window_seconds
+        current += 1
+        _rate_limit_memory[key] = (current, reset_at)
+        return current > limit, max(int(reset_at - now), 1)
+
+
+def _same_origin_request() -> bool:
+    origin = (request.headers.get("Origin") or "").strip()
+    referer = (request.headers.get("Referer") or "").strip()
+    source = origin or referer
+    if not source:
+        return False
+    try:
+        parsed = urlparse(source)
+    except Exception:
+        return False
+    if not parsed.netloc:
+        return False
+    return parsed.netloc == request.host
+
+
+def _ensure_csrf_token() -> str:
+    token = (session.get("csrf_token") or "").strip()
+    if token:
+        return token
+    token = secrets.token_urlsafe(32)
+    session["csrf_token"] = token
+    return token
+
+
+def _canary_bucket(salt: str = "default") -> int:
+    sid = str(session.get("sid") or "")
+    if not sid:
+        sid = uuid4().hex
+        session["sid"] = sid
+    digest = hashlib.sha256(f"{salt}:{sid}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % 100
+
+
+def _in_canary(percent: int, salt: str = "default") -> bool:
+    pct = max(0, min(int(percent), 100))
+    if pct <= 0:
+        return False
+    if pct >= 100:
+        return True
+    return _canary_bucket(salt) < pct
+
+
 @app.before_request
 def _trace_upload_requests():
     if request.path == "/upload":
         logger.info(f"Request {request.method} {request.path}")
+
+
+@app.before_request
+def _apply_rate_limits_and_csrf():
+    endpoint = request.endpoint or ""
+    method = (request.method or "GET").upper()
+
+    # Rate limits for high-risk/high-cost endpoints.
+    if endpoint == "login_submit":
+        limited, retry_after = _rate_limit_check(
+            "login",
+            os.getenv("DOCARO_RATE_LIMIT_LOGIN", "10/5m"),
+            default_limit=10,
+            default_window=300,
+        )
+        if limited:
+            return jsonify({"ok": False, "error": "rate_limited", "retry_after": retry_after}), 429
+
+    if endpoint in {"upload", "process_inbox", "analyze_docling", "chunk_document"}:
+        limited, retry_after = _rate_limit_check(
+            "upload",
+            os.getenv("DOCARO_RATE_LIMIT_UPLOAD", "30/5m"),
+            default_limit=30,
+            default_window=300,
+        )
+        if limited:
+            flash("Zu viele Upload-Aktionen in kurzer Zeit. Bitte kurz warten.")
+            return redirect(url_for("index"))
+
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+
+    # CSRF check for mutating requests (same-site fallback for legacy forms).
+    expected = _ensure_csrf_token()
+    provided = (
+        request.headers.get("X-CSRF-Token")
+        or request.form.get("csrf_token")
+        or request.headers.get("X-XSRF-TOKEN")
+    )
+    strict_percent = int(os.getenv("DOCARO_CSRF_CANARY_PERCENT", "0"))
+    strict_mode = os.getenv("DOCARO_CSRF_STRICT", "0") == "1" or _in_canary(strict_percent, "csrf-strict")
+
+    if provided and hmac.compare_digest(str(provided), expected):
+        return None
+
+    if _same_origin_request() and not strict_mode:
+        logger.warning("CSRF token missing/invalid for %s, allowed via same-origin fallback", endpoint or request.path)
+        return None
+
+    if request.headers.get("Accept", "").find("application/json") >= 0:
+        return jsonify({"ok": False, "error": "csrf_failed"}), 403
+    return "CSRF validation failed", 403
 
 
 if not DEBUG_MODE:
@@ -532,8 +692,25 @@ if not DEBUG_MODE:
         return "Internal Server Error", 500
 
 
+@app.context_processor
+def _inject_csrf_token() -> dict[str, str]:
+    return {"csrf_token": _ensure_csrf_token()}
+
+
 @app.after_request
 def _log_server_errors(response):
+    # Expose CSRF token for JS clients (same-site cookie).
+    try:
+        if request.path != "/metrics":
+            response.set_cookie(
+                "XSRF-TOKEN",
+                _ensure_csrf_token(),
+                secure=request.is_secure,
+                httponly=False,
+                samesite="Lax",
+            )
+    except Exception:
+        pass
     if response.status_code >= 500:
         logger.error(
             "HTTP %s %s -> %s",
@@ -831,10 +1008,26 @@ def settings_save():
 def status_json():
     try:
         _refresh_runtime_metrics()
+        processing = _is_processing()
+        active_job_id = str(session.get("active_job_id") or "")
+        if not processing and active_job_id:
+            session.pop("active_job_id", None)
+            active_job_id = ""
+        active_job_status = ""
+        if active_job_id:
+            try:
+                from rq.job import Job
+
+                active_job_status = str(Job.fetch(active_job_id, connection=redis_conn).get_status())
+            except Exception:
+                active_job_status = "unknown"
         progress = _load_progress()
         return jsonify({
             "ok": True,
-            "processing": _is_processing(),
+            "processing": processing,
+            "active_job_id": active_job_id,
+            "active_job_status": active_job_status,
+            "queue_depth": int(q.count),
             "files": _list_finished(),
             "results_count": len(_load_last_results() or []),
             "progress": progress,
@@ -842,6 +1035,45 @@ def status_json():
     except Exception as exc:
         _log_exception("status:handler", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/status.stream")
+def status_stream():
+    def _events():
+        while True:
+            try:
+                payload = {
+                    "ok": True,
+                    "processing": _is_processing(),
+                    "queue_depth": int(q.count),
+                    "progress": _load_progress(),
+                    "active_job_id": str(session.get("active_job_id") or ""),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=True)}\n\n"
+                if not payload["processing"]:
+                    break
+            except Exception as exc:
+                yield f"event: error\ndata: {json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=True)}\n\n"
+                break
+            time.sleep(1.5)
+
+    return Response(
+        stream_with_context(_events()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/metrics")
+def metrics_endpoint():
+    from core.metrics import metrics_payload
+
+    payload, content_type = metrics_payload()
+    return Response(payload, mimetype=content_type)
 
 
 @app.post("/analyze_docling")
@@ -1099,6 +1331,7 @@ def upload():
         upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
         upload_dir.mkdir(parents=True, exist_ok=True)
         saved_count = 0
+        duplicate_files: list[str] = []
         for storage in uploaded:
             if not storage or not storage.filename:
                 continue
@@ -1107,6 +1340,28 @@ def upload():
                 continue
             target_path = get_unique_path(upload_dir, safe_name)
             storage.save(target_path)
+            try:
+                file_hash = _sha256_file(target_path)
+            except Exception:
+                file_hash = ""
+            if file_hash:
+                try:
+                    known = _runtime_store.get_document_fingerprint(file_hash)
+                except Exception:
+                    known = None
+                if known:
+                    duplicate_files.append(safe_name)
+                    _safe_unlink(target_path)
+                    continue
+                try:
+                    _runtime_store.register_document_fingerprint(
+                        file_hash,
+                        original_name=safe_name,
+                        path=str(target_path),
+                        file_id="",
+                    )
+                except Exception as exc:
+                    count_step_error("runtime_store_fingerprint_register", exc)
             saved_count += 1
 
         if saved_count == 0:
@@ -1114,24 +1369,45 @@ def upload():
                 "No valid PDFs saved. uploaded=%s",
                 [getattr(f, "filename", "") for f in uploaded],
             )
+            if duplicate_files:
+                flash(
+                    f"Alle Dateien waren bereits bekannt und wurden übersprungen: "
+                    f"{', '.join(sorted(set(duplicate_files))[:5])}"
+                )
+                return redirect(url_for("index"))
             flash("Keine gültigen PDF-Dateien gefunden (nur .pdf erlaubt).")
             return redirect(url_for("index"))
+
+        if duplicate_files:
+            flash(f"{len(duplicate_files)} Dublette(n) übersprungen.")
 
         logger.info("Upload accepted: %s PDFs saved to %s", saved_count, upload_dir)
 
         # Check if a previous processing is stuck
         _check_processing_timeout()
 
-        _set_progress(total=saved_count, done=0)
+        if int(q.count) >= QUEUE_MAX_DEPTH:
+            flash(
+                f"Queue ist ausgelastet ({int(q.count)} Jobs >= Limit {QUEUE_MAX_DEPTH}). "
+                "Bitte in wenigen Minuten erneut versuchen."
+            )
+            return redirect(url_for("index"))
+
+        _set_progress(total=saved_count, done=0, current_file="", job_id="")
 
         # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
         _set_processing(True)
-        q.enqueue(
+        job = q.enqueue(
             background_process_upload,
             args=(upload_dir, date_fmt),
             job_timeout='30m',
-            result_ttl=86400
+            result_ttl=86400,
         )
+        session["active_job_id"] = str(job.id)
+        _set_progress(total=saved_count, done=0, current_file="", job_id=str(job.id))
+        canary_pct = int(os.getenv("DOCARO_UPLOAD_CANARY_PERCENT", "0"))
+        if _in_canary(canary_pct, "upload-queue"):
+            logger.info("Upload routed through canary cohort (job_id=%s, percent=%s)", job.id, canary_pct)
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("upload:handler", exc)
@@ -1262,14 +1538,16 @@ def _progress_path() -> Path:
     return TMP_DIR / "progress.json"
 
 
-def _set_progress(total: int, done: int, current_file: str = "") -> None:
+def _set_progress(total: int, done: int, current_file: str = "", job_id: str = "") -> None:
     try:
         TMP_DIR.mkdir(parents=True, exist_ok=True)
+        current = _load_progress() or {}
         payload = {
             "total": int(total),
             "done": int(done),
             "percent": (float(done) / float(total) * 100.0) if total else 0.0,
             "current_file": str(current_file or ""),
+            "job_id": str(job_id or current.get("job_id") or ""),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
         tmp_path = _progress_path().with_suffix(".json.tmp")
@@ -1318,6 +1596,9 @@ def _is_processing() -> bool:
 
 
 def _refresh_runtime_metrics() -> None:
+    global _last_runtime_store_health_check
+    global _last_runtime_store_checkpoint
+
     try:
         set_queue_depth("default", int(q.count))
     except Exception as exc:
@@ -1326,6 +1607,20 @@ def _refresh_runtime_metrics() -> None:
         set_inflight("web_processing", 1 if _is_processing() else 0)
     except Exception:
         pass
+    now = time.time()
+    try:
+        if now - _last_runtime_store_health_check >= 60:
+            _runtime_store.health_check()
+            _last_runtime_store_health_check = now
+    except Exception as exc:
+        count_step_error("runtime_store_health", exc)
+    try:
+        interval = max(int(os.getenv("DOCARO_RUNTIME_WAL_CHECKPOINT_SECONDS", "600")), 30)
+        if now - _last_runtime_store_checkpoint >= interval:
+            _runtime_store.checkpoint_wal(truncate=True)
+            _last_runtime_store_checkpoint = now
+    except Exception as exc:
+        count_step_error("runtime_store_checkpoint", exc)
 
 def background_process_upload(upload_dir: Path, date_fmt: str) -> None:
     background_process_folder(upload_dir, date_fmt=date_fmt, cleanup_input_dir=True, log_context="upload:bg_worker")
@@ -1471,6 +1766,18 @@ def _get_session_file_map() -> dict:
 
 def _set_session_file_entry(file_id: str, path: Path, filename: str) -> None:
     _storage_manager().set_session_file_entry(file_id, str(path), filename)
+    try:
+        if path and path.exists() and path.is_file():
+            file_hash = _sha256_file(path)
+            if file_hash:
+                _runtime_store.register_document_fingerprint(
+                    file_hash,
+                    original_name=filename or path.name,
+                    path=str(path),
+                    file_id=file_id,
+                )
+    except Exception as exc:
+        count_step_error("runtime_store_fingerprint_register", exc)
 
 
 def _remove_session_files() -> None:
@@ -1487,6 +1794,64 @@ def _load_supplier_corrections() -> dict:
 
 def _save_supplier_corrections(data: dict) -> None:
     _storage_manager().save_supplier_corrections(data)
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_supplier_profiles_cached() -> dict[str, dict]:
+    try:
+        mtime = SUPPLIER_PROFILES_PATH.stat().st_mtime if SUPPLIER_PROFILES_PATH.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+    cached_mtime = float(_supplier_profiles_cache.get("mtime") or 0.0)
+    if mtime == cached_mtime:
+        data = _supplier_profiles_cache.get("data")
+        if isinstance(data, dict):
+            return data  # type: ignore[return-value]
+    data = load_supplier_profiles(SUPPLIER_PROFILES_PATH)
+    _supplier_profiles_cache["mtime"] = mtime
+    _supplier_profiles_cache["data"] = data
+    return data
+
+
+def _append_ground_truth_sample(file_id: str, source: str) -> None:
+    result = _result_for_file_id(file_id) or {}
+    labels = {
+        "supplier": str(result.get("supplier") or "").strip(),
+        "date": str(result.get("date") or "").strip(),
+        "doc_type": str(result.get("doc_type") or "").strip(),
+        "doc_number": str(result.get("doc_number") or "").strip(),
+    }
+    if not any(labels.values()):
+        return
+    text_parts = [
+        str(result.get("ocr_text") or ""),
+        str(result.get("textlayer_text") or ""),
+        str(result.get("supplier_guess_line") or ""),
+        str(result.get("date_evidence") or ""),
+        str(result.get("doc_type_evidence") or ""),
+        str(result.get("out_name") or ""),
+    ]
+    sample = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "file_id": file_id,
+        "source": source,
+        "text": "\n".join(p for p in text_parts if p).strip()[:8000],
+        "labels": labels,
+    }
+    gt_path = DATA_DIR / "ml" / "ground_truth.jsonl"
+    gt_path.parent.mkdir(parents=True, exist_ok=True)
+    with gt_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(sample, ensure_ascii=True) + "\n")
 
 
 def _load_history_entries() -> list:
@@ -1544,14 +1909,18 @@ def _ensure_auto_sort_fields(item: dict) -> None:
 def _apply_result_flags(results):
     if results is None:
         return results
+    profiles = _load_supplier_profiles_cached()
     for item in results:
         _ensure_auto_sort_fields(item)
+        apply_supplier_profile(item, profiles)
         parsing_failed = bool(item.get("parsing_failed"))
         date_valAe = item.get("date")
         supplier_valAe = item.get("supplier")
         item["date_missing"] = _is_date_missing(date_valAe, parsing_failed)
         item["supplier_missing"] = _is_supplier_missing(supplier_valAe)
         item["supplier_broken"] = _is_supplier_broken(supplier_valAe)
+        item["processing_route"] = derive_processing_route(item)
+        item["review_priority_score"] = compute_review_priority(item)
         item["needs_review"] = _is_review_needed(item)
         if item.get("file_id"):
             item["view_url"] = url_for("view_pdf", file_id=item["file_id"])
@@ -1599,6 +1968,8 @@ def _row_payload(file_id: str, message: str = "") -> dict:
         "auto_sort_details": result.get("auto_sort_details") or {},
         "export_path": result.get("export_path") or "",
         "needs_review": bool(result.get("needs_review")),
+        "processing_route": result.get("processing_route") or "",
+        "review_priority_score": result.get("review_priority_score") or 0,
         "message": message,
     }
 
@@ -1779,6 +2150,10 @@ def confirm_supplier():
 
         # Online-Training: Korrektur ins Audit-Log schreiben (best-effort)
         _append_audit_correction(file_id, "supplier", supplier_name)
+        try:
+            _append_ground_truth_sample(file_id, source="confirm_supplier")
+        except Exception as exc:
+            count_step_error("ground_truth_append", exc)
         corrections = _load_supplier_corrections()
         corrections[file_id] = supplier_name
         _save_supplier_corrections(corrections)
@@ -2380,14 +2755,21 @@ def _is_review_needed(item: dict) -> bool:
         confidence = float(item.get("supplier_confidence") or 0)
     except (TypeError, ValueError):
         confidence = 0
-    return confidence < 0.85
+    profile_min = item.get("supplier_profile_review_conf_min")
+    try:
+        min_conf = float(profile_min) if profile_min is not None else 0.85
+    except (TypeError, ValueError):
+        min_conf = 0.85
+    return confidence < min_conf
 
 
 def _review_list():
     results = _load_last_results() or []
     results = _attach_file_ids(results) or []
     results = _apply_result_flags(results) or []
-    return [item for item in results if item.get("needs_review")]
+    review_items = [item for item in results if item.get("needs_review")]
+    review_items.sort(key=lambda x: float(x.get("review_priority_score") or 0), reverse=True)
+    return review_items
 
 
 @app.get("/view/<file_id>")
@@ -2613,6 +2995,10 @@ def confirm_date():
 
     # Online-Training: Datumskorrektur loggen
     _append_audit_correction(file_id, "date", date_iso)
+    try:
+        _append_ground_truth_sample(file_id, source="confirm_date")
+    except Exception as exc:
+        count_step_error("ground_truth_append", exc)
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -2726,6 +3112,10 @@ def confirm_doc_type():
 
     # Online-Training: DocType-Korrektur loggen
     _append_audit_correction(file_id, "doctype", raw_val)
+    try:
+        _append_ground_truth_sample(file_id, source="confirm_doc_type")
+    except Exception as exc:
+        count_step_error("ground_truth_append", exc)
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -2929,6 +3319,10 @@ def confirm_doc_number():
             "doc_number_after": doc_number,
         }
     )
+    try:
+        _append_ground_truth_sample(file_id, source="confirm_doc_number")
+    except Exception as exc:
+        count_step_error("ground_truth_append", exc)
 
     message = "Dokumentnummer gespeichert."
     if new_name and new_name != filename:
@@ -3240,6 +3634,10 @@ def confirm_all_from_view():
         _append_audit_correction(file_id, "date", date_iso)
     if raw_doc_type:
         _append_audit_correction(file_id, "doctype", raw_doc_type)
+    try:
+        _append_ground_truth_sample(file_id, source="confirm_all_from_view")
+    except Exception as exc:
+        count_step_error("ground_truth_append", exc)
 
     _append_history(
         {

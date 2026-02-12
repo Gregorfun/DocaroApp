@@ -15,7 +15,7 @@ Wenn das ursprüngliche Git-Remote nicht mehr existiert:
 
 ## 📈 Observability (Prometheus + Grafana)
 
-Docaro exportiert Laufzeitmetriken aus dem Worker (Port `9108`, konfigurierbar via `DOCARO_WORKER_METRICS_PORT`):
+Docaro exportiert Laufzeitmetriken aus dem Worker (Port `9108`, konfigurierbar via `DOCARO_WORKER_METRICS_PORT`) und aus dem Web-Service (`/metrics` auf Port `5001`):
 
 - `docaro_ocr_duration_seconds`
 - `docaro_pdf_render_duration_seconds`
@@ -35,6 +35,7 @@ Danach:
 - Grafana: `http://localhost:3000` (`admin` / `admin`)
 
 Das Basis-Dashboard wird automatisch provisioniert (`Docaro Observability`), inklusive P95/P99-Latenzen und Queue-/Error-Sicht.
+Zusätzlich sind Alert-Rules für Worker/Web-Down, Error-Rate, Queue-Backlog sowie OCR-P95/P99 enthalten.
 
 ## ⚡ Runtime Performance
 
@@ -52,6 +53,14 @@ Perzentil-Report aus `data/logs/run.csv`:
 ```bash
 python tools/report_performance_percentiles.py
 ```
+
+## 🧠 Document Intelligence (neu)
+
+- Automatisches Routing pro Dokument (`processing_route`) basierend auf `doc_type`
+- Unsicherheits-Priorisierung für Review (`review_priority_score`)
+- Supplier-Profile (`config/supplier_profiles.json`, Vorlage: `config/supplier_profiles.example.json`)
+- Dubletten-Erkennung im Upload via SHA-256 (SQLite-Registry)
+- Human-in-the-loop Learning: Korrekturen werden zusätzlich als Samples in `data/ml/ground_truth.jsonl` geschrieben
 
 ## 🚨 Exception Tracking (Sentry)
 
@@ -85,6 +94,15 @@ Konfiguration:
 
 - `DOCARO_RQ_DASHBOARD_ENABLED=1`
 - `DOCARO_RQ_DASHBOARD_URL_PREFIX=/rq`
+
+## 🔐 Security Hardening
+
+Optionale Schutzmechanismen (standardmäßig risikoarm konfiguriert):
+
+- Upload/Login Rate-Limits: `DOCARO_RATE_LIMIT_UPLOAD`, `DOCARO_RATE_LIMIT_LOGIN`
+- CSRF-Absicherung für mutierende Requests: `DOCARO_CSRF_STRICT=0|1`
+- Stufenweiser Rollout für CSRF-Härtung: `DOCARO_CSRF_CANARY_PERCENT=0..100`
+- Stufenweiser Rollout für Upload-Pipeline-Änderungen: `DOCARO_UPLOAD_CANARY_PERCENT=0..100`
 
 ---
 

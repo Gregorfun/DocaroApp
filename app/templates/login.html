@@ -28,6 +28,7 @@
           <p class="notice" style="border-color:#b91c1c;color:#b91c1c;">{{ error }}</p>
         {% endif %}
         <form action="{{ url_for('login_submit') }}" method="post" class="settings-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
           <div class="form-row">
             <label>E-Mail</label>
             <input type="email" name="email" required autocomplete="username" />

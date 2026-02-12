@@ -159,7 +159,12 @@ class ProgressDisplay {
     this.progressEl = null;
     this.messageInterval = null;
     this.animationInterval = null;
-    this.statusInterval = null;
+    this.statusTimer = null;
+    this.statsTimer = null;
+    this.sse = null;
+    this.pollDelayMs = 2000;
+    this.maxPollDelayMs = 10000;
+    this.usingSse = false;
     this.animationFrame = 0;
 
     this.init();
@@ -191,17 +196,21 @@ class ProgressDisplay {
     this.updateMessage();
     this.messageInterval = setInterval(() => this.updateMessage(), 4000);
     UploadMessages.fetchStats();
-    setInterval(() => UploadMessages.fetchStats(), 15000);
+    this.statsTimer = setInterval(() => UploadMessages.fetchStats(), 15000);
 
-    // Pollt den Verarbeitungsstatus ohne Voll-Reload/Flicker.
-    this.pollStatus();
-    this.statusInterval = setInterval(() => this.pollStatus(), 2000);
+    // Bevorzugt SSE, fällt bei Bedarf auf Polling mit Backoff zurück.
+    this.startLiveUpdates();
   }
 
   stop() {
     if (this.messageInterval) clearInterval(this.messageInterval);
     if (this.animationInterval) clearInterval(this.animationInterval);
-    if (this.statusInterval) clearInterval(this.statusInterval);
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    if (this.statsTimer) clearInterval(this.statsTimer);
+    if (this.sse) {
+      this.sse.close();
+      this.sse = null;
+    }
   }
 
   updateAnimation() {
@@ -236,6 +245,31 @@ class ProgressDisplay {
     }
   }
 
+  handlePayload(payload) {
+    if (!payload || payload.ok !== true) {
+      return;
+    }
+    const progress = payload.progress || {};
+    const done = Number(progress.done || 0);
+    const total = Number(progress.total || 0);
+    const currentFile = String(progress.current_file || '');
+    window.docaroProgress = { done, total, current_file: currentFile };
+    if (total > 0) {
+      this.updateProgress(done, total);
+    }
+    if (!payload.processing) {
+      this.stop();
+      window.location.reload();
+    }
+  }
+
+  scheduleNextPoll(delayMs) {
+    if (this.statusTimer) {
+      clearTimeout(this.statusTimer);
+    }
+    this.statusTimer = setTimeout(() => this.pollStatus(), delayMs);
+  }
+
   async pollStatus() {
     try {
       const response = await fetch('/status.json', {
@@ -244,29 +278,54 @@ class ProgressDisplay {
       });
       const contentType = response.headers.get('content-type') || '';
       if (!response.ok || !contentType.includes('application/json')) {
+        this.pollDelayMs = Math.min(Math.round(this.pollDelayMs * 1.4), this.maxPollDelayMs);
+        this.scheduleNextPoll(this.pollDelayMs);
         return;
       }
       const payload = await response.json();
-      if (!payload || payload.ok !== true) {
-        return;
-      }
-
-      const progress = payload.progress || {};
-      const done = Number(progress.done || 0);
-      const total = Number(progress.total || 0);
-      const currentFile = String(progress.current_file || '');
-      window.docaroProgress = { done, total, current_file: currentFile };
-      if (total > 0) {
-        this.updateProgress(done, total);
-      }
-
-      // Wenn der Job fertig ist, einmalig reloaden um Ergebnisliste/Downloads zu zeigen.
-      if (!payload.processing) {
-        this.stop();
-        window.location.reload();
-      }
+      this.pollDelayMs = 2000;
+      this.handlePayload(payload);
+      this.scheduleNextPoll(this.pollDelayMs);
     } catch (_) {
-      // Netzwerk-/Auth-Fehler temporär ignorieren, nächster Poll versucht erneut.
+      // Netzwerk-/Auth-Fehler: Backoff bis max. 10s.
+      this.pollDelayMs = Math.min(Math.round(this.pollDelayMs * 1.6), this.maxPollDelayMs);
+      this.scheduleNextPoll(this.pollDelayMs);
+    }
+  }
+
+  startSse() {
+    if (!window.EventSource) {
+      return false;
+    }
+    try {
+      this.sse = new EventSource('/status.stream');
+      this.usingSse = true;
+      this.sse.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data || '{}');
+          this.handlePayload(payload);
+        } catch (_) {
+          // ignore malformed frame
+        }
+      };
+      this.sse.onerror = () => {
+        if (this.sse) {
+          this.sse.close();
+          this.sse = null;
+        }
+        this.usingSse = false;
+        this.scheduleNextPoll(this.pollDelayMs);
+      };
+      return true;
+    } catch (_) {
+      this.usingSse = false;
+      return false;
+    }
+  }
+
+  startLiveUpdates() {
+    if (!this.startSse()) {
+      this.scheduleNextPoll(this.pollDelayMs);
     }
   }
 }

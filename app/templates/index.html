@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <title>Docaro OCR-Renamer</title>
     <script>
       // Theme sofort setzen um Flash zu verhindern
@@ -371,6 +372,20 @@
     </main>
     <script>
       (() => {
+        const csrfToken = (document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "").trim();
+        if (csrfToken) {
+          document.querySelectorAll('form[method="post"], form[method="POST"]').forEach((form) => {
+            if (form.querySelector('input[name="csrf_token"]')) {
+              return;
+            }
+            const tokenInput = document.createElement("input");
+            tokenInput.type = "hidden";
+            tokenInput.name = "csrf_token";
+            tokenInput.value = csrfToken;
+            form.appendChild(tokenInput);
+          });
+        }
+
         const bodyEl = document.querySelector("body");
         const editAll = bodyEl?.dataset?.editAll === "1";
         const initialCount = parseInt(bodyEl?.dataset?.resultsCount || "0", 10);
@@ -691,6 +706,7 @@
                 headers: {
                   "X-Requested-With": "fetch",
                   Accept: "application/json",
+                  ...(csrfToken ? {"X-CSRF-Token": csrfToken} : {}),
                 },
                 body: formData,
               });

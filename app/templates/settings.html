@@ -25,6 +25,7 @@
             <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
             <span aria-hidden="true">·</span>
             <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
               <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
             </form>
           </span>
@@ -41,6 +42,7 @@
 
       <section class="panel">
         <form action="{{ url_for('settings_save') }}" method="post" class="settings-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
           {% set inbox_path = (settings.inbox_dir|string) if settings.inbox_dir else '' %}
           {% set inbox_unavailable = inbox_path and (':\\' in inbox_path or ':/' in inbox_path) %}
           <div class="form-row">
@@ -113,9 +115,9 @@
           </div>
 
           <hr style="margin: 2rem 0;">
-          
+
           <h3>🔍 Review Queue Einstellungen</h3>
-          
+
           <div class="form-row">
             <label class="checkbox">
               <input type="checkbox" name="auto_finalize_enabled" value="1" {% if settings.auto_finalize_enabled %}checked{% endif %} />
@@ -126,28 +128,28 @@
 
           <div class="form-row">
             <label>Gate: Lieferant Confidence (min)</label>
-            <input type="range" name="gate_supplier_min" min="0" max="1" step="0.05" value="{{ settings.gate_supplier_min or 0.80 }}" 
+            <input type="range" name="gate_supplier_min" min="0" max="1" step="0.05" value="{{ settings.gate_supplier_min or 0.80 }}"
                    oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
             <output>{{ ((settings.gate_supplier_min or 0.80) * 100) | int }}%</output>
           </div>
 
           <div class="form-row">
             <label>Gate: Datum Confidence (min)</label>
-            <input type="range" name="gate_date_min" min="0" max="1" step="0.05" value="{{ settings.gate_date_min or 0.80 }}" 
+            <input type="range" name="gate_date_min" min="0" max="1" step="0.05" value="{{ settings.gate_date_min or 0.80 }}"
                    oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
             <output>{{ ((settings.gate_date_min or 0.80) * 100) | int }}%</output>
           </div>
 
           <div class="form-row">
             <label>Gate: Dokumenttyp Confidence (min)</label>
-            <input type="range" name="gate_doc_type_min" min="0" max="1" step="0.05" value="{{ settings.gate_doc_type_min or 0.70 }}" 
+            <input type="range" name="gate_doc_type_min" min="0" max="1" step="0.05" value="{{ settings.gate_doc_type_min or 0.70 }}"
                    oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
             <output>{{ ((settings.gate_doc_type_min or 0.70) * 100) | int }}%</output>
           </div>
 
           <div class="form-row">
             <label>Gate: Dokumentnummer Confidence (min)</label>
-            <input type="range" name="gate_doc_number_min" min="0" max="1" step="0.05" value="{{ settings.gate_doc_number_min or 0.80 }}" 
+            <input type="range" name="gate_doc_number_min" min="0" max="1" step="0.05" value="{{ settings.gate_doc_number_min or 0.80 }}"
                    oninput="this.nextElementSibling.textContent = (this.value * 100).toFixed(0) + '%'" />
             <output>{{ ((settings.gate_doc_number_min or 0.80) * 100) | int }}%</output>
           </div>

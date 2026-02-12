@@ -10,6 +10,15 @@ groups:
           summary: "Docaro worker metrics endpoint is down"
           description: "Prometheus cannot scrape docaro-worker metrics on port 9108."
 
+      - alert: DocaroWebMetricsDown
+        expr: up{job="docaro-web"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Docaro web metrics endpoint is down"
+          description: "Prometheus cannot scrape docaro-web metrics on port 5001."
+
       - alert: DocaroOCRP95High
         expr: |
           histogram_quantile(
@@ -60,6 +69,15 @@ groups:
         annotations:
           summary: "Docaro queue backlog is growing"
           description: "Default queue depth increased by more than 20 in 10m and remains above 10."
+
+      - alert: DocaroQueueBacklogCritical
+        expr: docaro_pipeline_queue_depth{queue="default"} > 50
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Docaro queue backlog is critically high"
+          description: "Default queue depth stayed above 50 for at least 15 minutes."
 
       - alert: DocaroRuntimeStoreErrors
         expr: |

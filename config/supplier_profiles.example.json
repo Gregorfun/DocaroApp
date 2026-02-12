@@ -1,0 +1,22 @@
+{
+  "WM GmbH": {
+    "name": "WM",
+    "route_tag": "warehouse",
+    "doc_type_force": "LIEFERSCHEIN",
+    "doc_type_confidence": 0.9,
+    "review_confidence_min": 0.9,
+    "doc_number_patterns": [
+      "(LS-\\d{4}-\\d+)",
+      "Lieferschein\\s*[:#]?\\s*([A-Z0-9\\-/]{4,30})"
+    ]
+  },
+  "Dekra": {
+    "name": "Dekra",
+    "route_tag": "quality",
+    "doc_type_force": "PRÜFBERICHT",
+    "review_confidence_min": 0.92,
+    "doc_number_patterns": [
+      "Prüfbericht\\s*Nr\\.?\\s*([A-Z0-9\\-/]{4,30})"
+    ]
+  }
+}
