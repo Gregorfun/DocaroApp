@@ -1,0 +1,20 @@
+# ================================================================
+# Visual Document Retrieval (optional)
+# Für Benchmarking / Integration der empfohlenen Modelle:
+# - ModernVBERT/bimodernvbert (dense)
+# - vidore/colqwen2-v1.0-hf (late interaction)
+# ================================================================
+
+# Core
+torch>=2.6.0
+transformers>=4.53.0
+pillow>=10.0.0
+
+# Für BiModernVBERT-API (colpali_engine)
+colpali-engine>=0.3.0
+
+# Für Granite-Docling Pilot (VLM-Pipeline)
+docling>=2.70.0
+
+# Optional: bessere GPU-Performance
+# flash-attn>=2.6.0

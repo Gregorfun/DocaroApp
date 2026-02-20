@@ -211,6 +211,77 @@ sqlite3 /opt/Docaro/data/ml/mlflow.db "SELECT * FROM experiments LIMIT 5;"
 
 ---
 
+## 🧪 LayoutLMv3 Fine-Tuning (Template)
+
+Docaro enthaelt jetzt ein Template fuer LayoutLMv3:
+- Datensatz-Build: `ml/training/build_layoutlmv3_dataset.py`
+- Training: `ml/training/train_layoutlmv3_template.py`
+
+Empfohlener Pfad:
+1. Realen Layout-Datensatz aus PDFs erstellen (Worte + echte Bounding-Boxes + Seitenbild)
+2. LayoutLMv3 auf diesem Datensatz trainieren
+
+Fallback:
+- Wenn kein Layout-Datensatz vorhanden ist, trainiert das Script weiterhin auf
+  `ground_truth.jsonl` mit synthetischen Boxes.
+
+### Installation (optional)
+
+```bash
+/opt/Docaro/.venv/bin/pip install -r /opt/Docaro/requirements-layoutlmv3.txt
+```
+
+### 1) Layout-Datensatz bauen (Supplier)
+
+```bash
+cd /opt/Docaro
+/opt/Docaro/.venv/bin/python ml/training/build_layoutlmv3_dataset.py \
+  --source-dir data/fertig \
+  --output-jsonl artifacts/layoutlmv3/dataset_supplier.jsonl \
+  --images-dir artifacts/layoutlmv3/images \
+  --label-field supplier \
+  --max-docs 200 \
+  --ocr-fallback
+```
+
+### 2) Training starten (Supplier-Klassifikation)
+
+```bash
+/opt/Docaro/.venv/bin/python ml/training/train_layoutlmv3_template.py \
+  --layout-input artifacts/layoutlmv3/dataset_supplier.jsonl \
+  --label-field supplier \
+  --output-dir artifacts/layoutlmv3/supplier \
+  --epochs 3 \
+  --batch-size 4
+```
+
+### Fallback-Training (ohne Layout-Datensatz)
+
+```bash
+/opt/Docaro/.venv/bin/python ml/training/train_layoutlmv3_template.py \
+  --input data/ml/ground_truth.jsonl \
+  --label-field supplier \
+  --output-dir artifacts/layoutlmv3/supplier_text_fallback
+```
+
+### Andere Label-Felder
+
+```bash
+# Dokumenttyp
+/opt/Docaro/.venv/bin/python ml/training/train_layoutlmv3_template.py --label-field doc_type
+
+# Dokumentnummer
+/opt/Docaro/.venv/bin/python ml/training/train_layoutlmv3_template.py --label-field doc_number
+```
+
+### Outputs
+
+- `artifacts/layoutlmv3/<task>/model/` (HF Modell + Processor)
+- `artifacts/layoutlmv3/<task>/metrics.json`
+- `artifacts/layoutlmv3/<task>/label_map.json`
+
+---
+
 ## 🚀 **Performance optimieren**
 
 ### **Problem: Wenige Trainingsdaten**
@@ -218,7 +289,7 @@ sqlite3 /opt/Docaro/data/ml/mlflow.db "SELECT * FROM experiments LIMIT 5;"
 **Lösung:**
 ```python
 # Data Augmentation: Variationen erzeugen
-"Lieferschein Manitowoc GmbH" 
+"Lieferschein Manitowoc GmbH"
 → "Manitowoc GmbH - Lieferschein"
 → "Lieferschein Manitowoc"
 → "Manitowoc Lieferschein"

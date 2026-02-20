@@ -54,6 +54,12 @@ class Config:
     SERVER_PORT = int(os.getenv("DOCARO_SERVER_PORT", "5001"))
     SERVER_USE_RELOADER = os.getenv("DOCARO_SERVER_USE_RELOADER", "0") == "1"
 
+    # Semantische Suche / Embeddings
+    VECTOR_BACKEND = os.getenv("DOCARO_VECTOR_BACKEND", "chroma")
+    VECTOR_COLLECTION = os.getenv("DOCARO_VECTOR_COLLECTION", "docaro_documents")
+    EMBEDDING_PROFILE = os.getenv("DOCARO_EMBEDDING_PROFILE", "sentence-transformers")
+    EMBEDDING_MODEL = os.getenv("DOCARO_EMBEDDING_MODEL")
+
     # Seed-User (optional). Passwort NIE committen, nur via ENV setzen.
     SEED_EMAIL_DEFAULT = os.getenv("DOCARO_SEED_EMAIL", "g.machuletz@bracht-autokrane.de")
 

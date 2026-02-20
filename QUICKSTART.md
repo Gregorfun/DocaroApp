@@ -125,7 +125,7 @@ if result.success:
     print(f"📊 Tabellen: {len(result.tables)}")
     print(f"🏗️  Layout-Elemente: {len(result.layout_elements)}")
     print(f"✂️  Chunks: {len(result.chunks)}")
-    
+
     # Export
     processor.export_to_markdown(
         result.docling_document,
@@ -139,7 +139,10 @@ if result.success:
 from services.vector_service import VectorService
 
 # Initialisiere (Chroma oder Qdrant)
-service = VectorService(backend="chroma")
+service = VectorService(
+    backend="chroma",
+    embedding_profile="sentence-transformers",  # oder "bimodernvbert"
+)
 
 # Speichere Dokument
 service.store_embedding(
@@ -163,6 +166,32 @@ for r in results:
     print(f"   Lieferant: {r.metadata.get('supplier')}")
 ```
 
+Optional für Visual-Retrieval-Modelle:
+
+```bash
+pip install -r requirements-visual-retrieval.txt
+```
+
+Pipeline-seitig per ENV umstellen:
+
+```bash
+export DOCARO_EMBEDDING_PROFILE=bimodernvbert
+export DOCARO_VECTOR_BACKEND=chroma
+```
+
+Granite-Docling Pilot:
+
+```bash
+/opt/Docaro/.venv/bin/python tools/pilot_granite_docling.py --source data/eingang/dein_dokument.pdf
+```
+
+Benchmark `bimodernvbert` vs `colnomic-7b`:
+
+```bash
+/opt/Docaro/.venv/bin/python tools/build_vdr_pairs.py --output data/ml/vdr_pairs.jsonl
+/opt/Docaro/.venv/bin/python tools/benchmark_visual_retrieval.py --input data/ml/vdr_pairs.jsonl --profiles bimodernvbert colnomic-7b
+```
+
 ### 5. ML-Training mit MLflow
 
 ```python
@@ -174,19 +203,19 @@ mlflow_service = MLflowService(experiment_name="docaro_training")
 with mlflow_service.start_run("supplier_classifier_v1"):
     # Trainiere Modell
     model = train_your_model()
-    
+
     # Logge Parameter
     mlflow_service.log_params({
         'n_estimators': 200,
         'max_depth': 20
     })
-    
+
     # Logge Metriken
     mlflow_service.log_metrics({
         'accuracy': 0.92,
         'f1_score': 0.89
     })
-    
+
     # Registriere Modell
     mlflow_service.log_model(
         model,
@@ -269,21 +298,21 @@ pipeline = DocumentPipeline()
 # Verarbeite alle PDFs in data/eingang/
 for pdf_path in config.INBOX_DIR.glob("*.pdf"):
     print(f"\n📄 Verarbeite: {pdf_path.name}")
-    
+
     result = pipeline.process_document(pdf_path)
-    
+
     if result.status == "success":
         print(f"✅ Erfolgreich:")
         print(f"   Lieferant: {result.supplier}")
         print(f"   Datum: {result.date}")
-        
+
         # Hier: Verschiebe nach fertig/, benenne um, etc.
-        
+
     elif result.status == "quarantine":
         print(f"⚠️  Quarantäne: {result.review_reason}")
-        
+
         # Hier: Verschiebe nach quarantaene/
-        
+
     else:
         print(f"❌ Fehler: {result.error}")
 ```

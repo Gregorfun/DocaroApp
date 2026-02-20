@@ -1,0 +1,9 @@
+# Optional dependencies for LayoutLMv3 fine-tuning template
+transformers>=4.57.0
+torch>=2.8.0
+datasets>=3.0.0
+accelerate>=1.0.0
+scikit-learn>=1.3.0
+pillow>=10.0.0
+pymupdf>=1.26.0
+pytesseract>=0.3.10

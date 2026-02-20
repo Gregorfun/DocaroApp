@@ -255,8 +255,38 @@ print(f"Score: {result['score']}")
 ```python
 from services.vector_service import VectorService
 
-service = VectorService(backend="chroma")
+# Standard-Profil (sentence-transformers)
+service = VectorService(backend="chroma", embedding_profile="sentence-transformers")
+# Optional: VDR-optimiertes Dense-Profil
+# service = VectorService(backend="chroma", embedding_profile="bimodernvbert")
+
 results = service.search("Rechnungen von ABC GmbH Januar 2026")
+```
+
+Für Visual-Retrieval-Modelle (optional):
+
+```bash
+pip install -r requirements-visual-retrieval.txt
+```
+
+ENV-Overrides für Pipeline-Embedding:
+
+```bash
+export DOCARO_EMBEDDING_PROFILE=bimodernvbert
+export DOCARO_VECTOR_BACKEND=chroma
+```
+
+Granite-Docling Pilot (separat, ohne Main-Pipeline-Umbau):
+
+```bash
+/opt/Docaro/.venv/bin/python tools/pilot_granite_docling.py --source data/eingang/dein_dokument.pdf
+```
+
+VDR-Benchmark (inkl. `colnomic-7b`):
+
+```bash
+/opt/Docaro/.venv/bin/python tools/build_vdr_pairs.py --output data/ml/vdr_pairs.jsonl
+/opt/Docaro/.venv/bin/python tools/benchmark_visual_retrieval.py --input data/ml/vdr_pairs.jsonl --profiles bimodernvbert colnomic-7b
 ```
 
 ---
