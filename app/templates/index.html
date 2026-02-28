@@ -349,6 +349,10 @@
                               <span class="detail-label">Table-Preview:</span>
                               <pre class="debug-pre" data-field="table_intelligence_preview">{% if item.table_intelligence_preview %}{{ item.table_intelligence_preview|tojson(indent=2) }}{% else %}-{% endif %}</pre>
                             </div>
+                            <div>
+                              <span class="detail-label">LLM-Assist:</span>
+                              <pre class="debug-pre" data-field="llm_assist">{% if item.llm_assist_used == '1' %}used={{ item.llm_assist_used }}, model={{ item.llm_assist_model or '-' }}, error={{ item.llm_assist_error or '-' }}{% else %}used=0{% endif %}</pre>
+                            </div>
                           </div>
                         </details>
                       </div>

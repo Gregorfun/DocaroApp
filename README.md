@@ -64,6 +64,11 @@ python tools/report_performance_percentiles.py
 - Tabellen-Intelligence (optional): zusätzliche Tabellenzeilen aus PDFs werden für `doc_type`/`doc_number` genutzt
   - Aktivierung: `DOCARO_TABLE_INTELLIGENCE_ENABLED=1`
   - Optionaler externer Adapter: `DOCARO_HF_TABLE_WEBHOOK` (sonst lokaler `pdfplumber`-Fallback)
+- LLM-Assist (optional, z.B. Ollama lokal) für unsichere Fälle
+  - Aktivierung: `DOCARO_LLM_ASSIST_ENABLED=1`
+  - Modell: `DOCARO_LLM_ASSIST_MODEL` (z.B. `llama3.1:8b-instruct`)
+  - Endpoint: `DOCARO_LLM_ASSIST_ENDPOINT` (Standard: `http://127.0.0.1:11434`)
+  - Wird konservativ als Rescue-Pfad genutzt (kein erzwungenes Überschreiben guter Werte)
 
 ## 🚨 Exception Tracking (Sentry)
 

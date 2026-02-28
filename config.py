@@ -43,6 +43,11 @@ class Config:
     TABLE_INTELLIGENCE_MAX_PAGES = int(os.getenv("DOCARO_TABLE_INTELLIGENCE_MAX_PAGES", "2"))
     HF_TABLE_WEBHOOK = os.getenv("DOCARO_HF_TABLE_WEBHOOK", "")
     HF_TABLE_TIMEOUT_SECONDS = float(os.getenv("DOCARO_HF_TABLE_TIMEOUT_SECONDS", "6"))
+    # Optional: LLM-Assist (z.B. Ollama lokal) für unsichere Dokumente
+    LLM_ASSIST_ENABLED = os.getenv("DOCARO_LLM_ASSIST_ENABLED", "0") == "1"
+    LLM_ASSIST_MODEL = os.getenv("DOCARO_LLM_ASSIST_MODEL", "llama3.1:8b-instruct")
+    LLM_ASSIST_ENDPOINT = os.getenv("DOCARO_LLM_ASSIST_ENDPOINT", "http://127.0.0.1:11434")
+    LLM_ASSIST_TIMEOUT_SECONDS = float(os.getenv("DOCARO_LLM_ASSIST_TIMEOUT_SECONDS", "12"))
     TESSERACT_CMD = os.getenv("DOCARO_TESSERACT_CMD")
     POPPLER_BIN = os.getenv("DOCARO_POPPLER_BIN")
     # Auto-Sort Defaults (können via Settings-Seite überschrieben werden)

@@ -55,6 +55,12 @@ except ImportError:
     extract_table_intelligence = None
 
 try:
+    from core.llm_assist import build_ollama_prompt, query_ollama_assist
+except ImportError:
+    build_ollama_prompt = None
+    query_ollama_assist = None
+
+try:
     from core.review_service import decide_review_status, load_review_settings, DocumentStatus
 except ImportError:
     decide_review_status = None
@@ -102,6 +108,10 @@ USE_PADDLEOCR = getattr(config, "USE_PADDLEOCR", False)
 PADDLEOCR_LANG = getattr(config, "PADDLEOCR_LANG", "german")
 PADDLEOCR_FALLBACK_THRESHOLD = float(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle für Fallback
 PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
+LLM_ASSIST_ENABLED = bool(getattr(config, "LLM_ASSIST_ENABLED", False))
+LLM_ASSIST_MODEL = str(getattr(config, "LLM_ASSIST_MODEL", "llama3.1:8b-instruct"))
+LLM_ASSIST_ENDPOINT = str(getattr(config, "LLM_ASSIST_ENDPOINT", "http://127.0.0.1:11434"))
+LLM_ASSIST_TIMEOUT_SECONDS = float(getattr(config, "LLM_ASSIST_TIMEOUT_SECONDS", 12))
 
 # Wenn Tesseract kaum Text liefert, lohnt sich oft ein zweiter Durchlauf
 # mit stärkerer Vorverarbeitung (Kontrast/Schärfe/Threshold). Default bewusst
@@ -2490,6 +2500,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "table_intelligence_rows": 0,
         "table_intelligence_preview": [],
         "table_intelligence_error": "",
+        "llm_assist_used": "",
+        "llm_assist_model": "",
+        "llm_assist_error": "",
+        "llm_assist_raw": "",
         "parsing_failed": False,
         "timing_render_ms": "",
         "timing_ocr_ms": "",
@@ -3021,6 +3035,100 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     result["doc_number"] = doc_number
     result["doc_number_source"] = doc_number_source or ""
     result["doc_number_confidence"] = doc_number_confidence
+
+    # Optional: Ollama/LLM-Assist als konservativer Rescue-Pfad bei unsicheren Ergebnissen.
+    if (
+        LLM_ASSIST_ENABLED
+        and build_ollama_prompt is not None
+        and query_ollama_assist is not None
+        and combined_text_for_extraction.strip()
+    ):
+        current_supplier_unknown = supplier_canonical in ("", "Unbekannt")
+        current_date_missing = not bool(date_obj)
+        current_doc_type_weak = (doc_type or "SONSTIGES") == "SONSTIGES" or float(doc_type_confidence or 0.0) < 0.70
+        docnum_conf_score = {"none": 0.0, "low": 0.4, "medium": 0.7, "high": 0.9}.get(str(doc_number_confidence or "").lower(), 0.0)
+        current_doc_number_weak = (
+            not str(doc_number or "").strip()
+            or str(doc_number or "").startswith("ohneNr")
+            or str(doc_number_source or "") in {"fallback", ""}
+            or docnum_conf_score < 0.7
+        )
+        need_llm = (
+            current_supplier_unknown
+            or float(supplier_confidence or 0.0) < 0.65
+            or current_date_missing
+            or float(date_confidence or 0.0) < 0.70
+            or current_doc_type_weak
+            or current_doc_number_weak
+        )
+        if need_llm:
+            prompt = build_ollama_prompt(
+                text=combined_text_for_extraction,
+                current_supplier=supplier_canonical or "",
+                current_doc_type=doc_type or "",
+                current_date=(date_obj.strftime(INTERNAL_DATE_FORMAT) if date_obj else ""),
+                current_doc_number=str(doc_number or ""),
+            )
+            llm = query_ollama_assist(
+                endpoint=LLM_ASSIST_ENDPOINT,
+                model=LLM_ASSIST_MODEL,
+                timeout_seconds=LLM_ASSIST_TIMEOUT_SECONDS,
+                prompt=prompt,
+            )
+            result["llm_assist_model"] = LLM_ASSIST_MODEL
+            result["llm_assist_error"] = llm.error or ""
+            result["llm_assist_raw"] = llm.raw_json or ""
+
+            llm_used = False
+
+            if llm.supplier and llm.supplier_confidence >= 0.82:
+                if current_supplier_unknown or float(supplier_confidence or 0.0) < 0.65:
+                    supplier_canonical = llm.supplier
+                    supplier_source = "llm_assist"
+                    supplier_confidence = max(float(supplier_confidence or 0.0), llm.supplier_confidence)
+                    llm_used = True
+
+            if llm.date_iso and llm.date_confidence >= 0.85:
+                if current_date_missing or float(date_confidence or 0.0) < 0.70:
+                    try:
+                        date_obj = datetime.strptime(llm.date_iso, INTERNAL_DATE_FORMAT)
+                        date_source = "llm_assist"
+                        date_confidence = max(float(date_confidence or 0.0), llm.date_confidence)
+                        date_evidence = "llm_assist"
+                        llm_used = True
+                    except ValueError:
+                        pass
+
+            if llm.doc_type and llm.doc_type_confidence >= 0.80:
+                if current_doc_type_weak:
+                    doc_type = llm.doc_type
+                    doc_type_confidence = max(float(doc_type_confidence or 0.0), llm.doc_type_confidence)
+                    doc_type_evidence = "llm_assist"
+                    llm_used = True
+
+            if llm.doc_number and llm.doc_number_confidence >= 0.82:
+                if current_doc_number_weak:
+                    doc_number = llm.doc_number
+                    doc_number_source = "llm_assist"
+                    doc_number_confidence = "high"
+                    llm_used = True
+
+            if llm_used:
+                result["llm_assist_used"] = "1"
+                result["supplier"] = supplier_canonical
+                result["supplier_canonical"] = supplier_canonical
+                result["supplier_confidence"] = f"{supplier_confidence:.2f}" if supplier_confidence else ""
+                result["supplier_source"] = supplier_source
+                result["date"] = date_obj.strftime(INTERNAL_DATE_FORMAT) if date_obj else ""
+                result["date_source"] = date_source if date_obj else ""
+                result["date_confidence"] = f"{date_confidence:.2f}" if date_obj else ""
+                result["date_evidence"] = date_evidence if date_obj else ""
+                result["doc_type"] = doc_type
+                result["doc_type_confidence"] = f"{doc_type_confidence:.2f}"
+                result["doc_type_evidence"] = doc_type_evidence
+                result["doc_number"] = doc_number
+                result["doc_number_source"] = doc_number_source or ""
+                result["doc_number_confidence"] = doc_number_confidence
 
     # Review-Status-Berechnung (Gate Check)
     if decide_review_status is not None and load_review_settings is not None:
