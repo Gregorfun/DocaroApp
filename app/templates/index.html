@@ -27,6 +27,10 @@
             <a href="{{ url_for('suppliers') }}">Lieferanten verwalten</a>
             <span aria-hidden="true">·</span>
             <a href="{{ url_for('settings_page') }}">Einstellungen</a>
+            {% if is_special_admin %}
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('special_admin_page') }}">Admin-Übersicht</a>
+            {% endif %}
             <span aria-hidden="true">·</span>
             <form action="{{ url_for('logout') }}" method="post" style="display:inline">
               <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>

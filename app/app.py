@@ -14,6 +14,7 @@ import re
 import hmac
 import hashlib
 import secrets
+import sqlite3
 from uuid import uuid4
 from contextlib import contextmanager
 import time
@@ -119,6 +120,7 @@ HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 RUNTIME_DB_PATH = DATA_DIR / "runtime_state.db"
 SUPPLIER_PROFILES_PATH = BASE_DIR / "config" / "supplier_profiles.json"
+SPECIAL_ADMIN_EMAIL = os.getenv("DOCARO_SPECIAL_ADMIN_EMAIL", "gregor.machuletz@gmx.de").strip().lower()
 
 # Download-Cleanup ("Refresh" nach Download)
 PRUNE_AFTER_DOWNLOAD = os.getenv("DOCARO_PRUNE_AFTER_DOWNLOAD", "1") == "1"
@@ -361,6 +363,157 @@ def _get_auto_sort_settings(refresh: bool = False) -> AutoSortSettings:
             pass
         AUTO_SORT_SETTINGS.base_dir = base_dir_path
     return AUTO_SORT_SETTINGS
+
+
+def _is_admin_session() -> bool:
+    return (session.get("user_role") or "").strip().lower() == "admin"
+
+
+def _is_special_admin_session() -> bool:
+    if not _is_admin_session():
+        return False
+    email = (session.get("user_email") or "").strip().lower()
+    if not email or not SPECIAL_ADMIN_EMAIL:
+        return False
+    return hmac.compare_digest(email, SPECIAL_ADMIN_EMAIL)
+
+
+def _safe_json_load(path: Path, fallback):
+    try:
+        if not path.exists():
+            return fallback
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return fallback
+
+
+def _count_pdfs(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        return sum(1 for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".pdf")
+    except OSError:
+        return 0
+
+
+def _scope_activity(scope_dir: Path) -> dict:
+    scope = scope_dir.name
+    tmp_dir = scope_dir / "tmp"
+    out_dir = scope_dir / "fertig"
+    quarantine_dir = scope_dir / "quarantaene"
+    inbox_dir = scope_dir / "eingang"
+
+    progress = _safe_json_load(tmp_dir / "progress.json", {}) if tmp_dir.exists() else {}
+    last_results = _safe_json_load(tmp_dir / "last_results.json", []) if tmp_dir.exists() else []
+    if not isinstance(last_results, list):
+        last_results = []
+
+    pending_downloads = 0
+    review_needs = 0
+    review_ready = 0
+    review_finalized = 0
+    for item in last_results:
+        if not isinstance(item, dict):
+            continue
+        if item.get("out_name") and not item.get("quarantined") and not item.get("downloaded_at"):
+            pending_downloads += 1
+        status = str(item.get("review_status") or "").upper()
+        if status == "NEEDS_REVIEW":
+            review_needs += 1
+        elif status == "READY":
+            review_ready += 1
+        elif status == "FINALIZED":
+            review_finalized += 1
+
+    modified_candidates = [tmp_dir / "progress.json", tmp_dir / "last_results.json"]
+    latest_mtime = 0.0
+    for candidate in modified_candidates:
+        try:
+            latest_mtime = max(latest_mtime, candidate.stat().st_mtime)
+        except OSError:
+            continue
+    last_activity = datetime.fromtimestamp(latest_mtime).isoformat(timespec="seconds") if latest_mtime else ""
+
+    return {
+        "scope": scope,
+        "processing": (tmp_dir / "processing.flag").exists(),
+        "progress_done": int(progress.get("done", 0)) if isinstance(progress, dict) else 0,
+        "progress_total": int(progress.get("total", 0)) if isinstance(progress, dict) else 0,
+        "pending_downloads": pending_downloads,
+        "review_needs": review_needs,
+        "review_ready": review_ready,
+        "review_finalized": review_finalized,
+        "out_pdf_count": _count_pdfs(out_dir),
+        "quarantine_pdf_count": _count_pdfs(quarantine_dir),
+        "inbox_pdf_count": _count_pdfs(inbox_dir),
+        "last_activity": last_activity,
+    }
+
+
+def _auth_user_totals() -> dict:
+    totals = {"total": 0, "admin": 0}
+    db_path = config.AUTH_DB_PATH
+    if not db_path.exists():
+        return totals
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN lower(role) = 'admin' THEN 1 ELSE 0 END) AS admin
+            FROM users
+            """
+        ).fetchone()
+        conn.close()
+        if row:
+            totals["total"] = int(row["total"] or 0)
+            totals["admin"] = int(row["admin"] or 0)
+    except Exception:
+        pass
+    return totals
+
+
+def _collect_special_admin_overview() -> dict:
+    users_root = DATA_DIR / "users"
+    scopes: list[dict] = []
+    if users_root.exists():
+        for scope_dir in sorted(users_root.iterdir(), key=lambda p: p.name):
+            if not scope_dir.is_dir():
+                continue
+            scopes.append(_scope_activity(scope_dir))
+
+    totals = {
+        "scopes": len(scopes),
+        "processing_scopes": sum(1 for s in scopes if s.get("processing")),
+        "pending_downloads": sum(int(s.get("pending_downloads") or 0) for s in scopes),
+        "review_needs": sum(int(s.get("review_needs") or 0) for s in scopes),
+        "review_ready": sum(int(s.get("review_ready") or 0) for s in scopes),
+        "review_finalized": sum(int(s.get("review_finalized") or 0) for s in scopes),
+        "out_pdf_count": sum(int(s.get("out_pdf_count") or 0) for s in scopes),
+        "quarantine_pdf_count": sum(int(s.get("quarantine_pdf_count") or 0) for s in scopes),
+        "inbox_pdf_count": sum(int(s.get("inbox_pdf_count") or 0) for s in scopes),
+    }
+    queue_depth = 0
+    try:
+        queue_depth = int(q.count)
+    except Exception:
+        queue_depth = 0
+
+    runtime_health = {"ok": False, "quick_check": "unknown", "journal_mode": "unknown"}
+    try:
+        runtime_health = _runtime_store.health_check()
+    except Exception:
+        pass
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "queue_depth": queue_depth,
+        "runtime_store": runtime_health,
+        "auth_users": _auth_user_totals(),
+        "totals": totals,
+        "scopes": scopes,
+    }
 
 
 def _looks_like_windows_drive_path(value: str) -> bool:
@@ -900,6 +1053,7 @@ def index():
         processing=processing,
         progress=progress,
         inbox_dir_display=inbox_dir_display,
+        is_special_admin=_is_special_admin_session(),
     )
 
 
@@ -926,7 +1080,19 @@ def settings_page():
         settings.gate_doc_number_min = 0.80
         settings.auto_finalize_enabled = False
 
-    return render_template("settings.html", settings=settings)
+    return render_template("settings.html", settings=settings, is_special_admin=_is_special_admin_session())
+
+
+@app.get("/admin/special")
+def special_admin_page():
+    if not _is_special_admin_session():
+        abort(403)
+    overview = _collect_special_admin_overview()
+    return render_template(
+        "admin_special.html",
+        overview=overview,
+        admin_email=SPECIAL_ADMIN_EMAIL,
+    )
 
 
 @app.post("/settings")

@@ -23,6 +23,10 @@
         <p class="meta-links">
           <span>
             <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+            {% if is_special_admin %}
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('special_admin_page') }}">Admin-Übersicht</a>
+            {% endif %}
             <span aria-hidden="true">·</span>
             <form action="{{ url_for('logout') }}" method="post" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />

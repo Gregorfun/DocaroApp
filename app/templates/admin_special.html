@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Docaro Admin-Uebersicht</title>
+    <script>
+      (function() {
+        const isDarkMode = localStorage.getItem('docaro-dark-mode');
+        if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark-mode');
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Admin-Uebersicht</h1>
+        <p class="meta-links">
+          <span>
+            <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('settings_page') }}">Einstellungen</a>
+            <span aria-hidden="true">·</span>
+            <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
+            </form>
+          </span>
+          <button id="theme-toggle-btn" type="button" aria-label="Design-Modus umschalten">🌙</button>
+        </p>
+        <p class="muted">Sichtbar nur fuer {{ admin_email }} mit Rolle <code>admin</code>. Stand: {{ overview.generated_at }}</p>
+      </header>
+
+      <section class="panel">
+        <h2>Systemstatus</h2>
+        <p>Queue-Tiefe: <strong>{{ overview.queue_depth }}</strong></p>
+        <p>RuntimeStore OK: <strong>{{ overview.runtime_store.ok }}</strong> (quick_check={{ overview.runtime_store.quick_check }}, journal={{ overview.runtime_store.journal_mode }})</p>
+        <p>Auth-Benutzer: <strong>{{ overview.auth_users.total }}</strong>, davon Admins: <strong>{{ overview.auth_users.admin }}</strong></p>
+      </section>
+
+      <section class="panel">
+        <h2>Gesamtzahlen ueber alle Benutzer</h2>
+        <p>Scopes: <strong>{{ overview.totals.scopes }}</strong>, aktiv verarbeitend: <strong>{{ overview.totals.processing_scopes }}</strong></p>
+        <p>Download-Pending: <strong>{{ overview.totals.pending_downloads }}</strong></p>
+        <p>Review: NEEDS_REVIEW=<strong>{{ overview.totals.review_needs }}</strong>, READY=<strong>{{ overview.totals.review_ready }}</strong>, FINALIZED=<strong>{{ overview.totals.review_finalized }}</strong></p>
+        <p>PDF-Bestaende: fertig=<strong>{{ overview.totals.out_pdf_count }}</strong>, quarantaene=<strong>{{ overview.totals.quarantine_pdf_count }}</strong>, eingang=<strong>{{ overview.totals.inbox_pdf_count }}</strong></p>
+      </section>
+
+      <section class="panel">
+        <h2>Pro Benutzer-Scope</h2>
+        {% if overview.scopes %}
+        <div style="overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr>
+                <th style="text-align:left; padding:0.4rem;">Scope</th>
+                <th style="text-align:right; padding:0.4rem;">Aktiv</th>
+                <th style="text-align:right; padding:0.4rem;">Fortschritt</th>
+                <th style="text-align:right; padding:0.4rem;">Pending</th>
+                <th style="text-align:right; padding:0.4rem;">Review</th>
+                <th style="text-align:right; padding:0.4rem;">Fertig</th>
+                <th style="text-align:right; padding:0.4rem;">Quarantaene</th>
+                <th style="text-align:right; padding:0.4rem;">Eingang</th>
+                <th style="text-align:left; padding:0.4rem;">Letzte Aktivitaet</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for scope in overview.scopes %}
+              <tr>
+                <td style="padding:0.4rem;">{{ scope.scope }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ "ja" if scope.processing else "nein" }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ scope.progress_done }}/{{ scope.progress_total }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ scope.pending_downloads }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ scope.review_needs }}/{{ scope.review_ready }}/{{ scope.review_finalized }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ scope.out_pdf_count }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ scope.quarantine_pdf_count }}</td>
+                <td style="text-align:right; padding:0.4rem;">{{ scope.inbox_pdf_count }}</td>
+                <td style="padding:0.4rem;">{{ scope.last_activity or "-" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="muted">Noch keine Benutzer-Scopes vorhanden.</p>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

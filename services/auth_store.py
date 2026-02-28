@@ -21,6 +21,12 @@ class User:
 
 
 _ph = PasswordHasher()
+_ALLOWED_ROLES = {"user", "admin"}
+
+
+def _normalize_role(role: str) -> str:
+    normalized = (role or "").strip().lower()
+    return normalized if normalized in _ALLOWED_ROLES else "user"
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -96,13 +102,14 @@ def get_user_by_id(db_path: Path, user_id: int) -> Optional[User]:
         )
 
 
-def create_user(db_path: Path, email: str, password: str) -> User:
+def create_user(db_path: Path, email: str, password: str, role: str = "user") -> User:
     init_auth_db(db_path)
     email_norm = (email or "").strip().lower()
     if not email_norm:
         raise ValueError("email_missing")
     if not password:
         raise ValueError("password_missing")
+    role_norm = _normalize_role(role)
 
     existing = get_user_by_email(db_path, email_norm)
     if existing:
@@ -113,13 +120,13 @@ def create_user(db_path: Path, email: str, password: str) -> User:
 
     with _connect(db_path) as conn:
         cur = conn.execute(
-            "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
-            (email_norm, password_hash, created_at),
+            "INSERT INTO users(email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+            (email_norm, password_hash, role_norm, created_at),
         )
         conn.commit()
         user_id = int(cur.lastrowid)
 
-    return User(user_id, email_norm, password_hash, created_at)
+    return User(user_id, email_norm, password_hash, role_norm, created_at)
 
 
 def set_user_password(db_path: Path, email: str, password: str) -> Optional[User]:
@@ -143,6 +150,27 @@ def set_user_password(db_path: Path, email: str, password: str) -> Optional[User
         conn.execute(
             "UPDATE users SET password_hash = ? WHERE email = ?",
             (password_hash, email_norm),
+        )
+        conn.commit()
+    return get_user_by_email(db_path, email_norm)
+
+
+def set_user_role(db_path: Path, email: str, role: str) -> Optional[User]:
+    """Setzt die Rolle für einen bestehenden Benutzer."""
+    init_auth_db(db_path)
+    email_norm = (email or "").strip().lower()
+    if not email_norm:
+        raise ValueError("email_missing")
+    role_norm = _normalize_role(role)
+
+    existing = get_user_by_email(db_path, email_norm)
+    if not existing:
+        return None
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE users SET role = ? WHERE email = ?",
+            (role_norm, email_norm),
         )
         conn.commit()
     return get_user_by_email(db_path, email_norm)

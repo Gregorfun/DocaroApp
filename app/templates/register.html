@@ -3,9 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Docaro Login</title>
+    <title>Docaro Registrierung</title>
     <script>
-      // Theme sofort setzen um Flash zu verhindern
       (function() {
         const isDarkMode = localStorage.getItem('docaro-dark-mode');
         if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
@@ -19,34 +18,36 @@
   <body>
     <main class="container">
       <header>
-        <h1>Login</h1>
-        <p class="muted">Docaro ist nur für registrierte Benutzer verfügbar.</p>
+        <h1>Registrierung</h1>
+        <p class="muted">Eigenes Konto für unabhängige Nutzung erstellen.</p>
       </header>
 
       <section class="panel">
         {% if error %}
           <p class="notice" style="border-color:#b91c1c;color:#b91c1c;">{{ error }}</p>
         {% endif %}
-        <form action="{{ url_for('login_submit') }}" method="post" class="settings-form">
+        <form action="{{ url_for('register_submit') }}" method="post" class="settings-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
           <div class="form-row">
             <label>E-Mail</label>
-            <input type="email" name="email" required autocomplete="username" />
+            <input type="email" name="email" required autocomplete="username" value="{{ email or '' }}" />
           </div>
           <div class="form-row">
             <label>Passwort</label>
-            <input type="password" name="password" required autocomplete="current-password" />
+            <input type="password" name="password" required autocomplete="new-password" minlength="8" />
+          </div>
+          <div class="form-row">
+            <label>Passwort wiederholen</label>
+            <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8" />
           </div>
           <div class="form-actions">
-            <button type="submit">Anmelden</button>
+            <button type="submit">Konto erstellen</button>
           </div>
         </form>
-        {% if allow_self_register %}
-          <p class="muted" style="margin-top:0.75rem;">
-            Noch kein Konto?
-            <a href="{{ url_for('register_page') }}">Jetzt registrieren</a>
-          </p>
-        {% endif %}
+        <p class="muted" style="margin-top:0.75rem;">
+          Bereits registriert?
+          <a href="{{ url_for('login_page') }}">Zum Login</a>
+        </p>
       </section>
     </main>
   </body>
