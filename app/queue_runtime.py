@@ -27,10 +27,13 @@ class QueueRuntimeManager:
         default_inbox_dir: Path,
         out_dir: Path,
         quarantine_dir: Path,
+        resolve_inbox_dir_for_scope: Callable[[str], Path],
+        resolve_out_dir: Callable[[str], Path],
+        resolve_quarantine_dir: Callable[[str], Path],
         refresh_runtime_metrics: Callable[[], None],
         is_processing: Callable[[], bool],
-        set_progress: Callable[[int, int, str], None],
-        set_processing: Callable[[bool], None],
+        set_progress: Callable[..., None],
+        set_processing: Callable[..., None],
         get_auto_sort_settings: Callable,
         resolve_inbox_dir: Callable[[Path], Path],
         looks_like_windows_drive_path: Callable[[str], bool],
@@ -40,9 +43,9 @@ class QueueRuntimeManager:
         clear_pdfs: Callable[[Path], None],
         apply_result_flags: Callable,
         apply_quarantine: Callable,
-        merge_last_results: Callable,
-        clear_progress: Callable[[], None],
-        processing_flag_path: Callable[[], Path],
+        merge_last_results: Callable[..., None],
+        clear_progress: Callable[..., None],
+        processing_flag_path: Callable[[str], Path],
         get_unique_path: Callable,
         observe_pipeline_step: Callable[[str, float], None],
         set_inflight: Callable[[str, int], None],
@@ -54,6 +57,9 @@ class QueueRuntimeManager:
         self.default_inbox_dir = default_inbox_dir
         self.out_dir = out_dir
         self.quarantine_dir = quarantine_dir
+        self.resolve_inbox_dir_for_scope = resolve_inbox_dir_for_scope
+        self.resolve_out_dir = resolve_out_dir
+        self.resolve_quarantine_dir = resolve_quarantine_dir
 
         self.refresh_runtime_metrics = refresh_runtime_metrics
         self.is_processing = is_processing
@@ -77,10 +83,10 @@ class QueueRuntimeManager:
         self.count_step_error = count_step_error
         self.log_exception = log_exception
 
-    def evaluate_inbox_request(self, date_fmt_raw: str) -> InboxDecision:
+    def evaluate_inbox_request(self, date_fmt_raw: str, user_scope: str = "") -> InboxDecision:
         self.refresh_runtime_metrics()
 
-        if self.is_processing():
+        if self.is_processing(user_scope):
             return InboxDecision(False, "Es läuft bereits eine Verarbeitung.")
 
         if int(self.q.count) >= self.queue_max_depth:
@@ -93,7 +99,11 @@ class QueueRuntimeManager:
             )
 
         settings = self.get_auto_sort_settings()
-        inbox_dir_raw = getattr(settings, "inbox_dir", self.default_inbox_dir)
+        default_inbox = self.resolve_inbox_dir_for_scope(user_scope) if user_scope else self.default_inbox_dir
+        inbox_dir_raw = getattr(settings, "inbox_dir", default_inbox)
+        # Enforce per-user inbox isolation unless an explicit user-local path is configured.
+        if user_scope:
+            inbox_dir_raw = default_inbox
         inbox_dir_raw_str = str(inbox_dir_raw)
         if os.name != "nt" and self.looks_like_windows_drive_path(inbox_dir_raw_str):
             return InboxDecision(False, self.windows_path_not_supported_message(inbox_dir_raw_str))
@@ -109,8 +119,8 @@ class QueueRuntimeManager:
             return InboxDecision(False, f"Keine PDFs in {inbox_dir} gefunden.")
 
         date_fmt = self.normalize_date_fmt(date_fmt_raw)
-        self.set_progress(total=len(pdfs), done=0)
-        self.set_processing(True)
+        self.set_progress(total=len(pdfs), done=0, current_file="", job_id="", user_scope=user_scope)
+        self.set_processing(True, user_scope=user_scope)
         return InboxDecision(True, inbox_dir=inbox_dir, date_fmt=date_fmt)
 
     def background_process_folder(
@@ -119,20 +129,23 @@ class QueueRuntimeManager:
         date_fmt: str,
         cleanup_input_dir: bool,
         log_context: str,
+        user_scope: str = "",
     ) -> None:
         started = time.perf_counter()
         self.set_inflight("worker_processing", 1)
+        out_dir = self.resolve_out_dir(user_scope) if user_scope else self.out_dir
+        quarantine_dir = self.resolve_quarantine_dir(user_scope) if user_scope else self.quarantine_dir
         try:
             def _progress_cb(done: int, total: int, filename: str) -> None:
-                self.set_progress(total=total, done=done, current_file=filename)
+                self.set_progress(total=total, done=done, current_file=filename, user_scope=user_scope)
 
-            results = self.process_folder(input_dir, self.out_dir, date_format=date_fmt, progress_callback=_progress_cb)
+            results = self.process_folder(input_dir, out_dir, date_format=date_fmt, progress_callback=_progress_cb)
 
             if results:
                 try:
-                    self.quarantine_dir.mkdir(parents=True, exist_ok=True)
+                    quarantine_dir.mkdir(parents=True, exist_ok=True)
                 except OSError:
-                    self.quarantine_dir
+                    quarantine_dir
 
                 for item in results:
                     if not item.get("parsing_failed") and not item.get("error"):
@@ -143,7 +156,7 @@ class QueueRuntimeManager:
                     src = input_dir / original
                     if not src.exists():
                         continue
-                    target = self.get_unique_path(self.quarantine_dir, src.name)
+                    target = self.get_unique_path(quarantine_dir, src.name)
                     try:
                         src.replace(target)
                     except OSError:
@@ -165,7 +178,7 @@ class QueueRuntimeManager:
 
             results = self.apply_result_flags(results)
             results = self.apply_quarantine(results)
-            self.merge_last_results(results)
+            self.merge_last_results(results, user_scope=user_scope)
         except Exception as exc:
             self.count_step_error("background_process_folder", exc)
             self.log_exception(log_context, exc)
@@ -173,9 +186,9 @@ class QueueRuntimeManager:
             self.observe_pipeline_step("background_process_folder", time.perf_counter() - started)
             self.set_inflight("worker_processing", 0)
             try:
-                flag = self.processing_flag_path()
+                flag = self.processing_flag_path(user_scope)
                 if flag.exists():
                     flag.unlink()
             except OSError:
                 pass
-            self.clear_progress()
+            self.clear_progress(user_scope=user_scope)

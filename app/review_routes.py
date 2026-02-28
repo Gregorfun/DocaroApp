@@ -33,23 +33,44 @@ _LOGGER = logging.getLogger(__name__)
 review_bp = Blueprint("review", __name__, url_prefix="/review")
 
 
+def _results_path_for_user() -> Path:
+    user_id = session.get("user_id")
+    user_email = (session.get("user_email") or "").strip().lower()
+    if user_id is not None and str(user_id).strip():
+        scope = f"user_{user_id}"
+    elif user_email:
+        scope = f"user_{user_email}"
+    else:
+        scope = "system"
+    safe_scope = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in scope).strip("_") or "system"
+    user_tmp = config.DATA_DIR / "users" / safe_scope / "tmp"
+    user_tmp.mkdir(parents=True, exist_ok=True)
+    return user_tmp / "last_results.json"
+
+
 def _load_session_files() -> dict:
-    """Lädt session_files.json."""
-    session_file_path = config.DATA_DIR / "session_files.json"
-    if not session_file_path.exists():
-        return {}
+    """Lädt user-spezifische Verarbeitungsergebnisse."""
+    results_path = _results_path_for_user()
+    if not results_path.exists():
+        return {"results": []}
     try:
-        return json.loads(session_file_path.read_text(encoding="utf-8"))
+        data = json.loads(results_path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            return {"results": []}
+        return {"results": data}
     except Exception:
-        return {}
+        return {"results": []}
 
 
 def _save_session_files(data: dict) -> None:
-    """Speichert session_files.json."""
-    session_file_path = config.DATA_DIR / "session_files.json"
-    session_file_path.parent.mkdir(parents=True, exist_ok=True)
-    session_file_path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
+    """Speichert user-spezifische Verarbeitungsergebnisse."""
+    results = data.get("results", []) if isinstance(data, dict) else []
+    if not isinstance(results, list):
+        results = []
+    results_path = _results_path_for_user()
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results_path.write_text(
+        json.dumps(results, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
 

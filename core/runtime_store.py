@@ -74,6 +74,31 @@ class RuntimeStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owned_documents (
+                    file_id TEXT PRIMARY KEY,
+                    owner_scope TEXT NOT NULL,
+                    path TEXT NOT NULL DEFAULT '',
+                    filename TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            # Backward-compatible migration for user-scoped dedupe.
+            try:
+                cols = conn.execute("PRAGMA table_info(document_fingerprints)").fetchall()
+                col_names = {str(row["name"]) for row in cols}
+                if "owner_scope" not in col_names:
+                    conn.execute("ALTER TABLE document_fingerprints ADD COLUMN owner_scope TEXT NOT NULL DEFAULT ''")
+                    conn.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_document_fingerprints_owner_sha
+                        ON document_fingerprints(owner_scope, sha256)
+                        """
+                    )
+            except Exception:
+                pass
             conn.commit()
 
     def _upsert_kv(self, key: str, value: Any) -> None:
@@ -249,54 +274,157 @@ class RuntimeStore:
             "checkpointed": int(row[2] or 0),
         }
 
-    def get_document_fingerprint(self, sha256: str) -> dict[str, Any] | None:
+    def get_document_fingerprint(self, sha256: str, *, owner_scope: str = "") -> dict[str, Any] | None:
         key = str(sha256 or "").strip().lower()
         if not key:
             return None
+        scope = str(owner_scope or "").strip().lower()
+        scoped_key = f"{scope}:{key}" if scope else key
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT sha256, first_seen_at, last_seen_at, original_name, last_path, last_file_id, seen_count
-                FROM document_fingerprints
-                WHERE sha256 = ?
-                """,
-                (key,),
-            ).fetchone()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT sha256, first_seen_at, last_seen_at, original_name, last_path, last_file_id, seen_count, owner_scope
+                    FROM document_fingerprints
+                    WHERE sha256 = ? AND owner_scope = ?
+                    """,
+                    (scoped_key, scope),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                row = conn.execute(
+                    """
+                    SELECT sha256, first_seen_at, last_seen_at, original_name, last_path, last_file_id, seen_count
+                    FROM document_fingerprints
+                    WHERE sha256 = ?
+                    """,
+                    (scoped_key,),
+                ).fetchone()
+            if not row and scope:
+                # Legacy fallback without scope prefix.
+                try:
+                    row = conn.execute(
+                        """
+                        SELECT sha256, first_seen_at, last_seen_at, original_name, last_path, last_file_id, seen_count, owner_scope
+                        FROM document_fingerprints
+                        WHERE sha256 = ? AND owner_scope = ?
+                        """,
+                        (key, scope),
+                    ).fetchone()
+                except Exception:
+                    row = None
         if not row:
             return None
         return {
-            "sha256": str(row["sha256"]),
+            "sha256": key,
             "first_seen_at": str(row["first_seen_at"]),
             "last_seen_at": str(row["last_seen_at"]),
             "original_name": str(row["original_name"] or ""),
             "last_path": str(row["last_path"] or ""),
             "last_file_id": str(row["last_file_id"] or ""),
             "seen_count": int(row["seen_count"] or 0),
+            "owner_scope": str((row["owner_scope"] if "owner_scope" in row.keys() else scope) or ""),
         }
 
-    def register_document_fingerprint(self, sha256: str, *, original_name: str, path: str, file_id: str) -> None:
+    def register_document_fingerprint(
+        self,
+        sha256: str,
+        *,
+        original_name: str,
+        path: str,
+        file_id: str,
+        owner_scope: str = "",
+    ) -> None:
         key = str(sha256 or "").strip().lower()
         if not key:
             return
+        scope = str(owner_scope or "").strip().lower()
+        scoped_key = f"{scope}:{key}" if scope else key
+        with self._connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO document_fingerprints(
+                        sha256, original_name, last_path, last_file_id, owner_scope, first_seen_at, last_seen_at, seen_count
+                    )
+                    VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)
+                    ON CONFLICT(owner_scope, sha256) DO UPDATE SET
+                        last_seen_at = datetime('now'),
+                        original_name = excluded.original_name,
+                        last_path = excluded.last_path,
+                        last_file_id = excluded.last_file_id,
+                        seen_count = document_fingerprints.seen_count + 1
+                    """,
+                    (
+                        scoped_key,
+                        str(original_name or ""),
+                        str(path or ""),
+                        str(file_id or ""),
+                        scope,
+                    ),
+                )
+            except sqlite3.OperationalError:
+                conn.execute(
+                    """
+                    INSERT INTO document_fingerprints(
+                        sha256, original_name, last_path, last_file_id, first_seen_at, last_seen_at, seen_count
+                    )
+                    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 1)
+                    ON CONFLICT(sha256) DO UPDATE SET
+                        last_seen_at = datetime('now'),
+                        original_name = excluded.original_name,
+                        last_path = excluded.last_path,
+                        last_file_id = excluded.last_file_id,
+                        seen_count = document_fingerprints.seen_count + 1
+                    """,
+                    (
+                        scoped_key,
+                        str(original_name or ""),
+                        str(path or ""),
+                        str(file_id or ""),
+                    ),
+                )
+            conn.commit()
+
+    def register_owned_document(self, file_id: str, *, owner_scope: str, path: str, filename: str) -> None:
+        fid = str(file_id or "").strip()
+        if not fid:
+            return
+        scope = str(owner_scope or "").strip().lower()
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO document_fingerprints(
-                    sha256, original_name, last_path, last_file_id, first_seen_at, last_seen_at, seen_count
-                )
-                VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 1)
-                ON CONFLICT(sha256) DO UPDATE SET
-                    last_seen_at = datetime('now'),
-                    original_name = excluded.original_name,
-                    last_path = excluded.last_path,
-                    last_file_id = excluded.last_file_id,
-                    seen_count = document_fingerprints.seen_count + 1
+                INSERT INTO owned_documents(file_id, owner_scope, path, filename, updated_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(file_id) DO UPDATE SET
+                    owner_scope = excluded.owner_scope,
+                    path = excluded.path,
+                    filename = excluded.filename,
+                    updated_at = datetime('now')
                 """,
-                (
-                    key,
-                    str(original_name or ""),
-                    str(path or ""),
-                    str(file_id or ""),
-                ),
+                (fid, scope, str(path or ""), str(filename or "")),
             )
             conn.commit()
+
+    def get_owned_document(self, file_id: str, *, owner_scope: str) -> dict[str, Any] | None:
+        fid = str(file_id or "").strip()
+        if not fid:
+            return None
+        scope = str(owner_scope or "").strip().lower()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT file_id, owner_scope, path, filename, updated_at
+                FROM owned_documents
+                WHERE file_id = ? AND owner_scope = ?
+                """,
+                (fid, scope),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "file_id": str(row["file_id"] or ""),
+            "owner_scope": str(row["owner_scope"] or ""),
+            "path": str(row["path"] or ""),
+            "filename": str(row["filename"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }

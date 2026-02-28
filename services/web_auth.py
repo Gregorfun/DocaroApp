@@ -48,6 +48,7 @@ def install_auth(
             return render_template("login.html", error="Ungültige Login-Daten."), 401
         session["user_id"] = user.id
         session["user_email"] = user.email
+        session["user_role"] = user.role or "user"
         return redirect(url_for("index"))
 
     @app.post("/logout")
@@ -77,6 +78,7 @@ def install_auth(
             if _wants_json():
                 return jsonify({"ok": False, "error": "auth_required"}), 401
             return redirect(url_for("login_page"))
+        session["user_role"] = user.role or "user"
         return None
 
 

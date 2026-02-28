@@ -98,6 +98,17 @@ Konfiguration:
 - `DOCARO_RQ_DASHBOARD_ENABLED=1`
 - `DOCARO_RQ_DASHBOARD_URL_PREFIX=/rq`
 
+## 👥 Multi-User Isolation
+
+Docaro trennt Laufzeitdaten pro Benutzer:
+
+- User-spezifische Verzeichnisse unter `data/users/<user_scope>/`
+  - `tmp/`, `eingang/`, `fertig/`, `quarantaene/`
+- User-spezifische Ergebnis-/Progress-Dateien
+- Job-Metadaten (`owner_scope`) in der Queue
+- Dokument-Ownership im RuntimeStore (`owned_documents`)
+- SHA-256-Dedupe user-scoped (keine user-übergreifende "bekannt"-Leckage)
+
 ## 🔐 Security Hardening
 
 Optionale Schutzmechanismen (standardmäßig risikoarm konfiguriert):

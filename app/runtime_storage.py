@@ -18,11 +18,13 @@ class RuntimeStorageManager:
         *,
         runtime_store: RuntimeStore,
         get_session_id: Callable[[], str],
+        get_user_scope: Callable[[], str],
         report_error: Callable[[str, Exception], None],
         log_retention_days: int,
     ) -> None:
         self._runtime_store = runtime_store
         self._get_session_id = get_session_id
+        self._get_user_scope = get_user_scope
         self._report_error = report_error
         self._log_retention_days = int(log_retention_days)
         self._session_cache: dict[str, object] = {"data": None, "mtime": 0.0}
@@ -66,8 +68,10 @@ class RuntimeStorageManager:
             self.save_session_files(data)
 
     def append_history(self, entry: dict) -> None:
+        payload = dict(entry or {})
+        payload.setdefault("owner_scope", self._get_user_scope())
         try:
-            self._runtime_store.append_history(entry)
+            self._runtime_store.append_history(payload)
         except Exception as exc:
             self._report_error("runtime_store_history_append", exc)
             return
@@ -88,10 +92,18 @@ class RuntimeStorageManager:
 
     def load_history_entries(self) -> list:
         try:
-            return self._runtime_store.load_history_entries()
+            items = self._runtime_store.load_history_entries()
         except Exception as exc:
             self._report_error("runtime_store_history_load", exc)
             return []
+        scope = self._get_user_scope()
+        out: list[dict] = []
+        for item in items:
+            owner = str(item.get("owner_scope") or "").strip().lower()
+            if owner and owner != scope:
+                continue
+            out.append(item)
+        return out
 
     def latest_history_entry(self) -> Optional[dict]:
         entries = self.load_history_entries()

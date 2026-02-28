@@ -27,6 +27,7 @@ from flask import (
     Response,
     abort,
     flash,
+    has_request_context,
     jsonify,
     redirect,
     render_template,
@@ -725,10 +726,10 @@ def _allowed_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
 
 
-def _mark_results_downloaded(out_names: set[str]) -> None:
+def _mark_results_downloaded(out_names: set[str], user_scope: str = "") -> None:
     if not out_names:
         return
-    results = _load_last_results() or []
+    results = _load_last_results(user_scope=user_scope) or []
     if not results:
         return
     now_iso = datetime.now().isoformat(timespec="seconds")
@@ -741,7 +742,7 @@ def _mark_results_downloaded(out_names: set[str]) -> None:
             item["downloaded_at"] = now_iso
             touched = True
     if touched:
-        _save_last_results(results)
+        _save_last_results(results, user_scope=user_scope)
 
 
 def _remove_session_entries_for_sid(sid: str, file_ids: set[str] | None = None, filenames: set[str] | None = None) -> None:
@@ -824,7 +825,7 @@ def _prune_tmp_upload_dirs(max_age_hours: int) -> None:
             continue
 
 
-def _cleanup_after_download(*, sid: str, out_names: set[str], pdf_paths: list[Path]) -> None:
+def _cleanup_after_download(*, sid: str, out_names: set[str], pdf_paths: list[Path], user_scope: str = "") -> None:
     """Best-effort: hält die UI/Session sauber und räumt alte TMP-Ordner weg.
 
     Standardmäßig werden keine Dokumente gelöscht (um das System nicht zu beeinträchtigen).
@@ -835,22 +836,24 @@ def _cleanup_after_download(*, sid: str, out_names: set[str], pdf_paths: list[Pa
 
     # 1) Optional: Dateien löschen (nur wenn explizit aktiviert)
     if DELETE_FILES_AFTER_DOWNLOAD:
+        out_dir = _user_out_dir(user_scope)
+        quarantine_dir = _user_quarantine_dir(user_scope)
         for p in pdf_paths or []:
             if not p:
                 continue
-            if _is_path_within(p, OUT_DIR) or _is_path_within(p, QUARANTINE_DIR):
+            if _is_path_within(p, out_dir) or _is_path_within(p, quarantine_dir):
                 _safe_unlink(p)
 
         # Fallback nach Name (falls resolve_pdf_path in andere Orte zeigt)
         for name in out_names:
             if not name:
                 continue
-            _safe_unlink(OUT_DIR / name)
-            _safe_unlink(QUARANTINE_DIR / name)
+            _safe_unlink(out_dir / name)
+            _safe_unlink(quarantine_dir / name)
 
     # 2) Ergebnisse markieren, damit Download-Liste nicht mehr verstopft
     try:
-        _mark_results_downloaded(out_names)
+        _mark_results_downloaded(out_names, user_scope=user_scope)
     except Exception as exc:
         logger.warning("cleanup: mark downloaded failed: %s", exc)
 
@@ -1037,6 +1040,7 @@ def status_json():
         }
         return jsonify({
             "ok": True,
+            "user_scope": _current_user_scope(),
             "processing": processing,
             "active_job_id": active_job_id,
             "active_job_status": active_job_status,
@@ -1058,6 +1062,7 @@ def status_stream():
             try:
                 payload = {
                     "ok": True,
+                    "user_scope": _current_user_scope(),
                     "processing": _is_processing(),
                     "queue_depth": int(q.count),
                     "progress": _load_progress(),
@@ -1357,8 +1362,9 @@ def upload():
 
         date_fmt = _normalize_date_fmt(request.form.get("date_fmt", ""))
         include_known = request.form.get("include_known") in ("1", "on", "true")
+        user_scope = _current_user_scope()
 
-        upload_dir = TMP_DIR / f"upload_{uuid4().hex}"
+        upload_dir = _user_tmp_dir(user_scope) / f"upload_{uuid4().hex}"
         upload_dir.mkdir(parents=True, exist_ok=True)
         saved_count = 0
         duplicate_files: list[str] = []
@@ -1377,7 +1383,7 @@ def upload():
                 file_hash = ""
             if file_hash:
                 try:
-                    known = _runtime_store.get_document_fingerprint(file_hash)
+                    known = _runtime_store.get_document_fingerprint(file_hash, owner_scope=user_scope)
                 except Exception:
                     known = None
                 if known:
@@ -1393,6 +1399,7 @@ def upload():
                         original_name=safe_name,
                         path=str(target_path),
                         file_id="",
+                        owner_scope=user_scope,
                     )
                 except Exception as exc:
                     count_step_error("runtime_store_fingerprint_register", exc)
@@ -1436,18 +1443,19 @@ def upload():
             )
             return redirect(url_for("index"))
 
-        _set_progress(total=saved_count, done=0, current_file="", job_id="")
+        _set_progress(total=saved_count, done=0, current_file="", job_id="", user_scope=user_scope)
 
         # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
-        _set_processing(True)
+        _set_processing(True, user_scope=user_scope)
         job = q.enqueue(
             background_process_upload,
-            args=(upload_dir, date_fmt),
+            args=(upload_dir, date_fmt, user_scope),
             job_timeout='30m',
             result_ttl=86400,
         )
+        _tag_job_owner(job, user_scope)
         session["active_job_id"] = str(job.id)
-        _set_progress(total=saved_count, done=0, current_file="", job_id=str(job.id))
+        _set_progress(total=saved_count, done=0, current_file="", job_id=str(job.id), user_scope=user_scope)
         canary_pct = int(os.getenv("DOCARO_UPLOAD_CANARY_PERCENT", "0"))
         if _in_canary(canary_pct, "upload-queue"):
             logger.info("Upload routed through canary cohort (job_id=%s, percent=%s)", job.id, canary_pct)
@@ -1489,28 +1497,29 @@ def _clear_pdfs(dir_path: Path) -> None:
 def _check_processing_timeout() -> None:
     """Check if processing is stuck and reset if older than 15 minutes."""
     try:
-        flag_path = _processing_flag_path()
+        user_scope = _current_user_scope()
+        flag_path = _processing_flag_path(user_scope=user_scope)
         if not flag_path.exists():
             return
         from datetime import datetime, timedelta
         mtime = datetime.fromtimestamp(flag_path.stat().st_mtime)
         # If we see no progress updates for a while, assume stuck worker/job.
         try:
-            prog = _progress_path()
+            prog = _progress_path(user_scope=user_scope)
             if prog.exists():
                 prog_mtime = datetime.fromtimestamp(prog.stat().st_mtime)
                 if datetime.now() - prog_mtime > timedelta(minutes=8):
                     logger.warning("No progress update for >8 minutes, auto-recovering")
-                    _set_processing(False)
-                    _clear_progress()
+                    _set_processing(False, user_scope=user_scope)
+                    _clear_progress(user_scope=user_scope)
                     return
         except Exception:
             pass
 
         if datetime.now() - mtime > timedelta(minutes=15):
             logger.warning("Processing stuck for >15 minutes, auto-recovering")
-            _set_processing(False)
-            _clear_progress()
+            _set_processing(False, user_scope=user_scope)
+            _clear_progress(user_scope=user_scope)
     except Exception as e:
         logger.warning(f"Error checking processing timeout: {e}")
 
@@ -1522,12 +1531,63 @@ def _get_session_id() -> str:
     return sid
 
 
+def _sanitize_scope(value: str) -> str:
+    raw = (value or "").strip().lower()
+    safe = re.sub(r"[^a-z0-9_-]+", "_", raw).strip("_")
+    return safe or "system"
+
+
+def _current_user_scope(explicit_scope: str = "") -> str:
+    if explicit_scope:
+        return _sanitize_scope(explicit_scope)
+    if has_request_context():
+        user_id = session.get("user_id")
+        if user_id is not None and str(user_id).strip():
+            return _sanitize_scope(f"user_{user_id}")
+        user_email = (session.get("user_email") or "").strip().lower()
+        if user_email:
+            return _sanitize_scope(f"user_{user_email}")
+    return "system"
+
+
+def _user_data_root(user_scope: str = "") -> Path:
+    scope = _current_user_scope(user_scope)
+    root = DATA_DIR / "users" / scope
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _user_tmp_dir(user_scope: str = "") -> Path:
+    path = _user_data_root(user_scope) / "tmp"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _user_inbox_dir(user_scope: str = "") -> Path:
+    path = _user_data_root(user_scope) / "eingang"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _user_out_dir(user_scope: str = "") -> Path:
+    path = _user_data_root(user_scope) / "fertig"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _user_quarantine_dir(user_scope: str = "") -> Path:
+    path = _user_data_root(user_scope) / "quarantaene"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _storage_manager() -> RuntimeStorageManager:
     global _runtime_storage_manager
     if _runtime_storage_manager is None:
         _runtime_storage_manager = RuntimeStorageManager(
             runtime_store=_runtime_store,
             get_session_id=_get_session_id,
+            get_user_scope=_current_user_scope,
             report_error=count_step_error,
             log_retention_days=LOG_RETENTION_DAYS,
         )
@@ -1543,6 +1603,9 @@ def _queue_manager() -> QueueRuntimeManager:
             default_inbox_dir=INBOX_DIR,
             out_dir=OUT_DIR,
             quarantine_dir=QUARANTINE_DIR,
+            resolve_inbox_dir_for_scope=_user_inbox_dir,
+            resolve_out_dir=_user_out_dir,
+            resolve_quarantine_dir=_user_quarantine_dir,
             refresh_runtime_metrics=_refresh_runtime_metrics,
             is_processing=_is_processing,
             set_progress=_set_progress,
@@ -1568,23 +1631,24 @@ def _queue_manager() -> QueueRuntimeManager:
     return _queue_runtime_manager
 
 
-def _session_results_path() -> Path:
-    # Verwende globale Ergebnisdatei, um Session-Mismatches zu vermeiden
-    return TMP_DIR / "last_results.json"
+def _session_results_path(user_scope: str = "") -> Path:
+    scope = _current_user_scope(user_scope)
+    return _user_tmp_dir(scope) / "last_results.json"
 
-def _processing_flag_path() -> Path:
-    # Verwende globale Flag-Datei, damit der Index unabhänging von der Session greift
-    return TMP_DIR / "processing.flag"
-
-
-def _progress_path() -> Path:
-    return TMP_DIR / "progress.json"
+def _processing_flag_path(user_scope: str = "") -> Path:
+    scope = _current_user_scope(user_scope)
+    return _user_tmp_dir(scope) / "processing.flag"
 
 
-def _set_progress(total: int, done: int, current_file: str = "", job_id: str = "") -> None:
+def _progress_path(user_scope: str = "") -> Path:
+    scope = _current_user_scope(user_scope)
+    return _user_tmp_dir(scope) / "progress.json"
+
+
+def _set_progress(total: int, done: int, current_file: str = "", job_id: str = "", user_scope: str = "") -> None:
     try:
         TMP_DIR.mkdir(parents=True, exist_ok=True)
-        current = _load_progress() or {}
+        current = _load_progress(user_scope=user_scope) or {}
         payload = {
             "total": int(total),
             "done": int(done),
@@ -1592,26 +1656,28 @@ def _set_progress(total: int, done: int, current_file: str = "", job_id: str = "
             "current_file": str(current_file or ""),
             "job_id": str(job_id or current.get("job_id") or ""),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "user_scope": _current_user_scope(user_scope),
         }
-        tmp_path = _progress_path().with_suffix(".json.tmp")
+        target = _progress_path(user_scope=user_scope)
+        tmp_path = target.with_suffix(".json.tmp")
         tmp_path.write_text(json.dumps(payload), encoding="utf-8")
-        tmp_path.replace(_progress_path())
+        tmp_path.replace(target)
     except Exception:
         # Progress-Anzeige darf die Verarbeitung nie brechen.
         pass
 
 
-def _clear_progress() -> None:
+def _clear_progress(user_scope: str = "") -> None:
     try:
-        path = _progress_path()
+        path = _progress_path(user_scope=user_scope)
         if path.exists():
             path.unlink()
     except OSError:
         pass
 
 
-def _load_progress() -> Optional[dict]:
-    path = _progress_path()
+def _load_progress(user_scope: str = "") -> Optional[dict]:
+    path = _progress_path(user_scope=user_scope)
     if not path.exists():
         return None
     try:
@@ -1620,20 +1686,20 @@ def _load_progress() -> Optional[dict]:
     except Exception:
         return None
 
-def _set_processing(value: bool) -> None:
+def _set_processing(value: bool, user_scope: str = "") -> None:
     try:
+        flag_path = _processing_flag_path(user_scope=user_scope)
         if value:
-            _processing_flag_path().write_text("1", encoding="utf-8")
+            flag_path.write_text("1", encoding="utf-8")
         else:
-            path = _processing_flag_path()
-            if path.exists():
-                path.unlink()
+            if flag_path.exists():
+                flag_path.unlink()
     except OSError:
         pass
 
-def _is_processing() -> bool:
+def _is_processing(user_scope: str = "") -> bool:
     try:
-        return _processing_flag_path().exists()
+        return _processing_flag_path(user_scope=user_scope).exists()
     except OSError:
         return False
 
@@ -1647,7 +1713,8 @@ def _refresh_runtime_metrics() -> None:
     except Exception as exc:
         count_step_error("queue_depth", exc)
     try:
-        set_inflight("web_processing", 1 if _is_processing() else 0)
+        inflight = 1 if list((DATA_DIR / "users").glob("*/tmp/processing.flag")) else 0
+        set_inflight("web_processing", inflight)
     except Exception:
         pass
     now = time.time()
@@ -1665,30 +1732,55 @@ def _refresh_runtime_metrics() -> None:
     except Exception as exc:
         count_step_error("runtime_store_checkpoint", exc)
 
-def background_process_upload(upload_dir: Path, date_fmt: str) -> None:
-    background_process_folder(upload_dir, date_fmt=date_fmt, cleanup_input_dir=True, log_context="upload:bg_worker")
+def background_process_upload(upload_dir: Path, date_fmt: str, user_scope: str = "") -> None:
+    background_process_folder(
+        upload_dir,
+        date_fmt=date_fmt,
+        cleanup_input_dir=True,
+        log_context="upload:bg_worker",
+        user_scope=user_scope,
+    )
+
+
+def _tag_job_owner(job, user_scope: str) -> None:
+    try:
+        if not job:
+            return
+        job.meta["owner_scope"] = _current_user_scope(user_scope)
+        job.save_meta()
+    except Exception:
+        pass
 
 
 @app.post("/process_inbox")
 def process_inbox():
     try:
-        decision = _queue_manager().evaluate_inbox_request(request.form.get("date_fmt", ""))
+        user_scope = _current_user_scope()
+        decision = _queue_manager().evaluate_inbox_request(
+            request.form.get("date_fmt", ""),
+            user_scope=user_scope,
+        )
         if not decision.proceed:
             flash(decision.flash_message)
             return redirect(url_for("index"))
-        q.enqueue(
+        job = q.enqueue(
             background_process_folder,
             args=(decision.inbox_dir, decision.date_fmt),
-            kwargs={"cleanup_input_dir": False, "log_context": "inbox:bg_worker"},
+            kwargs={
+                "cleanup_input_dir": False,
+                "log_context": "inbox:bg_worker",
+                "user_scope": user_scope,
+            },
             job_timeout="1h",
             result_ttl=86400,
         )
+        _tag_job_owner(job, user_scope)
         _refresh_runtime_metrics()
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("inbox:handler", exc)
         count_step_error("process_inbox", exc)
-        _set_processing(False)
+        _set_processing(False, user_scope=_current_user_scope())
         raise
 
 
@@ -1698,20 +1790,22 @@ def background_process_folder(
     date_fmt: str,
     cleanup_input_dir: bool = False,
     log_context: str = "bg_worker",
+    user_scope: str = "",
 ) -> None:
     _queue_manager().background_process_folder(
         input_dir=input_dir,
         date_fmt=date_fmt,
         cleanup_input_dir=cleanup_input_dir,
         log_context=log_context,
+        user_scope=user_scope,
     )
 
 
-def _save_last_results(results) -> None:
+def _save_last_results(results, user_scope: str = "") -> None:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     # Nur noch Datei schreiben, keine Session mehr (atomar, damit kein Partial-JSON entsteht)
     payload = json.dumps(results, indent=2)
-    target = _session_results_path()
+    target = _session_results_path(user_scope=user_scope)
     tmp_path = target.with_suffix(".json.tmp")
     tmp_path.write_text(payload, encoding="utf-8")
     tmp_path.replace(target)
@@ -1731,7 +1825,7 @@ def _result_key(item: dict) -> str:
     return f"unknown:{uuid4().hex}"
 
 
-def _merge_last_results(new_results: list[dict] | None) -> None:
+def _merge_last_results(new_results: list[dict] | None, user_scope: str = "") -> None:
     """Merge new processing results into persisted last_results.
 
     This keeps previously processed (and not downloaded) files in the download list,
@@ -1740,7 +1834,7 @@ def _merge_last_results(new_results: list[dict] | None) -> None:
     if not new_results:
         return
 
-    existing = _load_last_results() or []
+    existing = _load_last_results(user_scope=user_scope) or []
     existing_by_key: dict[str, dict] = {}
     existing_order: list[str] = []
 
@@ -1777,19 +1871,19 @@ def _merge_last_results(new_results: list[dict] | None) -> None:
 
     merged_list = [existing_by_key[k] for k in existing_order if k in existing_by_key]
     merged_list.extend(existing_by_key[k] for k in new_keys_in_order if k in existing_by_key)
-    _save_last_results(merged_list)
+    _save_last_results(merged_list, user_scope=user_scope)
 
 
-def _load_last_results():
+def _load_last_results(user_scope: str = ""):
     # Nur noch aus Datei lesen, Session ignorieren
-    results_path = _session_results_path()
+    results_path = _session_results_path(user_scope=user_scope)
     if not results_path.exists():
         return None
     try:
         results = json.loads(results_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
-    results = _apply_supplier_corrections(results)
+    results = _apply_supplier_corrections(results, user_scope=user_scope)
     for item in results or []:
         _ensure_auto_sort_fields(item)
     return results
@@ -1807,8 +1901,18 @@ def _get_session_file_map() -> dict:
     return _storage_manager().get_session_file_map()
 
 
-def _set_session_file_entry(file_id: str, path: Path, filename: str) -> None:
+def _set_session_file_entry(file_id: str, path: Path, filename: str, user_scope: str = "") -> None:
+    user_scope = _current_user_scope(user_scope)
     _storage_manager().set_session_file_entry(file_id, str(path), filename)
+    try:
+        _runtime_store.register_owned_document(
+            file_id,
+            owner_scope=user_scope,
+            path=str(path),
+            filename=str(filename or ""),
+        )
+    except Exception as exc:
+        count_step_error("runtime_store_owned_register", exc)
     try:
         if path and path.exists() and path.is_file():
             file_hash = _sha256_file(path)
@@ -1818,6 +1922,7 @@ def _set_session_file_entry(file_id: str, path: Path, filename: str) -> None:
                     original_name=filename or path.name,
                     path=str(path),
                     file_id=file_id,
+                    owner_scope=user_scope,
                 )
     except Exception as exc:
         count_step_error("runtime_store_fingerprint_register", exc)
@@ -2058,14 +2163,15 @@ def reset_downloads():
             except OSError:
                 continue
     _remove_session_files()
-    results_path = _session_results_path()
+    user_scope = _current_user_scope()
+    results_path = _session_results_path(user_scope=user_scope)
     if results_path.exists():
         try:
             results_path.unlink()
         except OSError:
             pass
     # Processing-Flag auch löschen
-    proc_flag = _processing_flag_path()
+    proc_flag = _processing_flag_path(user_scope=user_scope)
     if proc_flag.exists():
         try:
             proc_flag.unlink()
@@ -2383,7 +2489,7 @@ def _find_pdf_path(filename: str) -> Optional[Path]:
     return resolve_pdf_path(filename)
 
 
-def resolve_pdf_path(filename: str) -> Optional[Path]:
+def resolve_pdf_path(filename: str, user_scope: str = "") -> Optional[Path]:
     if not filename:
         return None
     candidates = []
@@ -2394,14 +2500,14 @@ def resolve_pdf_path(filename: str) -> Optional[Path]:
         candidates.append(safe_name)
     if not candidates:
         return None
-    result = _result_for_filename(filename) or {}
+    result = _result_for_filename(filename, user_scope=user_scope) or {}
     export_path_val = (result.get("export_path") or "").strip()
     if export_path_val:
         export_path = Path(export_path_val)
-        if export_path.exists() and _is_allowed_pdf_path(export_path):
+        if export_path.exists() and _is_allowed_pdf_path(export_path, user_scope=user_scope):
             return export_path
     # Search known roots first; deep scan is optional for performance reasons.
-    roots = _allowed_roots()
+    roots = _allowed_roots(user_scope=user_scope)
     for root in roots:
         for name in candidates:
             candidate = root / name
@@ -2418,20 +2524,21 @@ def resolve_pdf_path(filename: str) -> Optional[Path]:
     return None
 
 
-def _allowed_roots() -> list[Path]:
+def _allowed_roots(user_scope: str = "") -> list[Path]:
+    scope = _current_user_scope(user_scope)
     roots = [
-        TMP_DIR,
-        INBOX_DIR,
-        OUT_DIR,
-        QUARANTINE_DIR,
-        DATA_DIR / "fertig",
-        BASE_DIR / "daten_eingang",
-        BASE_DIR / "daten_fertig",
+        _user_tmp_dir(scope),
+        _user_inbox_dir(scope),
+        _user_out_dir(scope),
+        _user_quarantine_dir(scope),
     ]
     try:
         auto_settings = _get_auto_sort_settings()
         if auto_settings and auto_settings.base_dir:
-            roots.append(Path(auto_settings.base_dir))
+            base = Path(auto_settings.base_dir)
+            # Optionaler AutoSort-Ordner nur zulassen, wenn er im User-Bereich liegt.
+            if str(base.resolve()).startswith(str(_user_data_root(scope).resolve())):
+                roots.append(base)
     except Exception:
         pass
     # Remove duplicates while preserving order
@@ -2515,12 +2622,12 @@ def _apply_quarantine(results: list) -> list:
     return results
 
 
-def _is_allowed_pdf_path(path: Path) -> bool:
+def _is_allowed_pdf_path(path: Path, user_scope: str = "") -> bool:
     try:
         resolved = path.resolve()
     except OSError:
         return False
-    for root in _allowed_roots():
+    for root in _allowed_roots(user_scope=user_scope):
         try:
             resolved.relative_to(root.resolve())
         except (ValueError, OSError):
@@ -2529,24 +2636,25 @@ def _is_allowed_pdf_path(path: Path) -> bool:
     return False
 
 
-def _resolve_file_path(file_id: str) -> Optional[Path]:
-    entry = _get_session_file_entry(file_id)
+def _resolve_file_path(file_id: str, user_scope: str = "") -> Optional[Path]:
+    scope = _current_user_scope(user_scope)
+    entry = _get_session_file_entry(file_id, user_scope=scope)
     tried = set()
     if entry:
         path_str = entry.get("path") or ""
         if path_str:
             candidate = Path(path_str)
-            if candidate.exists() and _is_allowed_pdf_path(candidate):
+            if candidate.exists() and _is_allowed_pdf_path(candidate, user_scope=scope):
                 return candidate
         filename = entry.get("filename") or ""
         if filename:
             tried.add(filename)
-    result = _result_for_file_id(file_id) or {}
+    result = _result_for_file_id(file_id, user_scope=scope) or {}
     export_path_val = (result.get("export_path") or "").strip()
     if export_path_val:
         export_path = Path(export_path_val)
-        if export_path.exists() and _is_allowed_pdf_path(export_path):
-            _set_session_file_entry(file_id, export_path, export_path.name)
+        if export_path.exists() and _is_allowed_pdf_path(export_path, user_scope=scope):
+            _set_session_file_entry(file_id, export_path, export_path.name, user_scope=scope)
             return export_path
     for key in ("out_name", "filename", "original", "original_name"):
         valAe = result.get(key) or ""
@@ -2557,14 +2665,21 @@ def _resolve_file_path(file_id: str) -> Optional[Path]:
         if safe_name:
             tried.add(safe_name)
     for name in tried:
-        fallback = resolve_pdf_path(name)
+        fallback = resolve_pdf_path(name, user_scope=scope)
         if fallback:
-            _set_session_file_entry(file_id, fallback, fallback.name)
+            _set_session_file_entry(file_id, fallback, fallback.name, user_scope=scope)
             return fallback
     return None
 
 
-def _get_session_file_entry(file_id: str) -> Optional[dict]:
+def _get_session_file_entry(file_id: str, user_scope: str = "") -> Optional[dict]:
+    scope = _current_user_scope(user_scope)
+    try:
+        owned = _runtime_store.get_owned_document(file_id, owner_scope=scope)
+        if owned:
+            return {"path": owned.get("path", ""), "filename": owned.get("filename", "")}
+    except Exception as exc:
+        count_step_error("runtime_store_owned_load", exc)
     data = _load_session_files()
     sid = _get_session_id()
     return data.get(sid, {}).get(file_id)
@@ -2607,7 +2722,7 @@ def _locked_file(path: Path, mode: str = "a+", retries: int = 20, delay: float =
         handle.close()
 
 
-def _apply_supplier_corrections(results):
+def _apply_supplier_corrections(results, user_scope: str = ""):
     if results is None:
         return results
     corrections = _load_supplier_corrections()
@@ -2641,7 +2756,7 @@ def _apply_supplier_corrections(results):
             item["supplier_confidence"] = "1.00"
             changed = True
     if changed:
-        _save_last_results(results)
+        _save_last_results(results, user_scope=user_scope)
     return results
 
 
@@ -2769,16 +2884,16 @@ def _set_result_error(file_id: str, message: str) -> None:
     _save_last_results(results)
 
 
-def _result_for_filename(filename: str):
-    results = _load_last_results() or []
+def _result_for_filename(filename: str, user_scope: str = ""):
+    results = _load_last_results(user_scope=user_scope) or []
     for item in results:
         if item.get("out_name") == filename:
             return item
     return None
 
 
-def _result_for_file_id(file_id: str):
-    results = _load_last_results() or []
+def _result_for_file_id(file_id: str, user_scope: str = ""):
+    results = _load_last_results(user_scope=user_scope) or []
     for item in results:
         if item.get("file_id") == file_id:
             return item
@@ -3963,9 +4078,17 @@ def download(filename: str):
     try:
         if PRUNE_AFTER_DOWNLOAD:
             sid = _get_session_id()
+            user_scope = _current_user_scope()
             cleanup_out_names = {safe_name}
             cleanup_paths = [pdf_path] if pdf_path else []
-            resp.call_on_close(lambda: _cleanup_after_download(sid=sid, out_names=cleanup_out_names, pdf_paths=cleanup_paths))
+            resp.call_on_close(
+                lambda: _cleanup_after_download(
+                    sid=sid,
+                    out_names=cleanup_out_names,
+                    pdf_paths=cleanup_paths,
+                    user_scope=user_scope,
+                )
+            )
     except Exception as exc:
         logger.warning("Failed to register download cleanup: %s", exc)
     return resp
@@ -4160,9 +4283,17 @@ def download_all():
     try:
         if PRUNE_AFTER_DOWNLOAD:
             sid = _get_session_id()
+            user_scope = _current_user_scope()
             cleanup_out_names = set(filenames)
             cleanup_paths = list(pdfs)
-            resp.call_on_close(lambda: _cleanup_after_download(sid=sid, out_names=cleanup_out_names, pdf_paths=cleanup_paths))
+            resp.call_on_close(
+                lambda: _cleanup_after_download(
+                    sid=sid,
+                    out_names=cleanup_out_names,
+                    pdf_paths=cleanup_paths,
+                    user_scope=user_scope,
+                )
+            )
     except Exception as exc:
         logger.warning("Failed to register download_all cleanup: %s", exc)
     return resp
@@ -4172,15 +4303,8 @@ def download_all():
 def get_stats():
     """Liefert Verarbeitungsstatistiken für die Upload-Anzeige."""
     try:
-        # Lade History für Statistiken
-        history_data = []
-        if HISTORY_PATH.exists():
-            with open(HISTORY_PATH, "r", encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        history_data.append(json.loads(line.strip()))
-                    except json.JSONDecodeError:
-                        continue
+        # Lade user-spezifische History für Statistiken
+        history_data = _load_history_entries() or []
 
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

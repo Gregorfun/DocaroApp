@@ -16,6 +16,7 @@ class User:
     id: int
     email: str
     password_hash: str
+    role: str
     created_at: str
 
 
@@ -37,10 +38,18 @@ def init_auth_db(db_path: Path) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
                 created_at TEXT NOT NULL
             )
             """
         )
+        try:
+            cols = conn.execute("PRAGMA table_info(users)").fetchall()
+            col_names = {str(row["name"]) for row in cols}
+            if "role" not in col_names:
+                conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        except Exception:
+            pass
         conn.commit()
 
 
@@ -51,28 +60,40 @@ def get_user_by_email(db_path: Path, email: str) -> Optional[User]:
     with _connect(db_path) as conn:
         try:
             row = conn.execute(
-                "SELECT id, email, password_hash, created_at FROM users WHERE email = ?",
+                "SELECT id, email, password_hash, role, created_at FROM users WHERE email = ?",
                 (email_norm,),
             ).fetchone()
         except sqlite3.OperationalError:
             return None
         if not row:
             return None
-        return User(int(row["id"]), str(row["email"]), str(row["password_hash"]), str(row["created_at"]))
+        return User(
+            int(row["id"]),
+            str(row["email"]),
+            str(row["password_hash"]),
+            str(row["role"] or "user"),
+            str(row["created_at"]),
+        )
 
 
 def get_user_by_id(db_path: Path, user_id: int) -> Optional[User]:
     with _connect(db_path) as conn:
         try:
             row = conn.execute(
-                "SELECT id, email, password_hash, created_at FROM users WHERE id = ?",
+                "SELECT id, email, password_hash, role, created_at FROM users WHERE id = ?",
                 (int(user_id),),
             ).fetchone()
         except sqlite3.OperationalError:
             return None
         if not row:
             return None
-        return User(int(row["id"]), str(row["email"]), str(row["password_hash"]), str(row["created_at"]))
+        return User(
+            int(row["id"]),
+            str(row["email"]),
+            str(row["password_hash"]),
+            str(row["role"] or "user"),
+            str(row["created_at"]),
+        )
 
 
 def create_user(db_path: Path, email: str, password: str) -> User:
