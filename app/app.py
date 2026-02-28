@@ -1343,8 +1343,9 @@ def chunk_document():
 @app.post("/upload")
 def upload():
     try:
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        user_scope = _current_user_scope()
+        _user_out_dir(user_scope).mkdir(parents=True, exist_ok=True)
+        _user_tmp_dir(user_scope).mkdir(parents=True, exist_ok=True)
 
         # Robust: unterschiedliche Feldnamen abfangen (Browser/Clients)
         uploaded = request.files.getlist("files")
@@ -1579,6 +1580,27 @@ def _user_quarantine_dir(user_scope: str = "") -> Path:
     path = _user_data_root(user_scope) / "quarantaene"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _user_autosort_dir(user_scope: str = "") -> Path:
+    path = _user_data_root(user_scope) / "autosort"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _effective_auto_sort_settings(user_scope: str = "") -> AutoSortSettings:
+    scope = _current_user_scope(user_scope)
+    settings = _get_auto_sort_settings()
+    return AutoSortSettings(
+        enabled=settings.enabled,
+        base_dir=_user_autosort_dir(scope),
+        folder_format=settings.folder_format,
+        mode=settings.mode,
+        confidence_threshold=settings.confidence_threshold,
+        fallback_folder=settings.fallback_folder,
+        inbox_dir=_user_inbox_dir(scope),
+        inbox_interval_minutes=settings.inbox_interval_minutes,
+    )
 
 
 def _storage_manager() -> RuntimeStorageManager:
@@ -2534,6 +2556,7 @@ def _allowed_roots(user_scope: str = "") -> list[Path]:
         _user_inbox_dir(scope),
         _user_out_dir(scope),
         _user_quarantine_dir(scope),
+        _user_autosort_dir(scope),
     ]
     try:
         auto_settings = _get_auto_sort_settings()
@@ -2584,15 +2607,16 @@ def _is_quarantine_needed(item: dict) -> Tuple[bool, str]:
     return False, ""
 
 
-def _apply_quarantine(results: list) -> list:
+def _apply_quarantine(results: list, user_scope: str = "") -> list:
     """Moves uncertain PDFs into QUARANTINE_DIR and marks results.
 
     Must never raise: quarantine is a best-effort safety net.
     """
     if not results:
         return results
+    quarantine_dir = _user_quarantine_dir(user_scope)
     try:
-        QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         return results
 
@@ -2608,16 +2632,16 @@ def _apply_quarantine(results: list) -> list:
             continue
 
         try:
-            current = resolve_pdf_path(filename)
-            if not current or not current.exists() or not _is_allowed_pdf_path(current):
+            current = resolve_pdf_path(filename, user_scope=user_scope)
+            if not current or not current.exists() or not _is_allowed_pdf_path(current, user_scope=user_scope):
                 continue
             # Already in quarantine
             try:
-                current.resolve().relative_to(QUARANTINE_DIR.resolve())
+                current.resolve().relative_to(quarantine_dir.resolve())
                 continue
             except Exception:
                 pass
-            target = get_unique_path(QUARANTINE_DIR, current.name)
+            target = get_unique_path(quarantine_dir, current.name)
             current.replace(target)
         except OSError:
             continue
@@ -2768,7 +2792,7 @@ def _trim_history() -> None:
 
 
 def _rename_pdf_with_name(pdf_path: Path, filename: str) -> Tuple[Optional[Path], str]:
-    return _move_pdf_to_dir(pdf_path, OUT_DIR, filename)
+    return _move_pdf_to_dir(pdf_path, _user_out_dir(), filename)
 
 
 def _move_pdf_to_dir(pdf_path: Path, target_dir: Path, filename: str) -> Tuple[Optional[Path], str]:
@@ -2822,7 +2846,7 @@ def _sync_pdf_location(file_id: str, pdf_path: Path) -> Tuple[Optional[Path], st
         return pdf_path, ""
     result = _result_for_file_id(file_id) or {}
     quarantined = bool(result.get("quarantined"))
-    desired_dir = QUARANTINE_DIR if quarantined else OUT_DIR
+    desired_dir = _user_quarantine_dir() if quarantined else _user_out_dir()
     desired_name = (result.get("out_name") or "").strip() or pdf_path.name
     target_path, err = _move_pdf_to_dir(pdf_path, desired_dir, desired_name)
     if err or not target_path:
@@ -2857,7 +2881,7 @@ def _update_auto_sort_metadata(
 
 
 def _auto_sort_pdf(result: dict, pdf_path: Path) -> Tuple[Path, str, str]:
-    settings = _get_auto_sort_settings()
+    settings = _effective_auto_sort_settings()
     export_result = export_document(pdf_path, result, settings)
     target_path = export_result.path or pdf_path
     status = export_result.status
@@ -3045,7 +3069,7 @@ def confirm_date_from_view():
     doc_number = (result.get("doc_number") or "").strip() or None
     new_filename = build_new_filename(supplier, date_obj, delivery_note_nr=doc_number, date_format=date_fmt)
     original_path = str(pdf_path)
-    target_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+    target_path, move_error = _move_pdf_to_dir(pdf_path, _user_out_dir(), new_filename)
     if move_error or not target_path:
         return _render_view_pdf(file_id, date_error="Datei konnte nicht umbenannt werden.")
 
@@ -3126,7 +3150,7 @@ def confirm_date():
     doc_number = (result.get("doc_number") or "").strip() or None
     new_filename = build_new_filename(supplier, date_obj, delivery_note_nr=doc_number, date_format=date_fmt)
     original_path = str(pdf_path)
-    target_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+    target_path, move_error = _move_pdf_to_dir(pdf_path, _user_out_dir(), new_filename)
     if move_error or not target_path:
         flash("Datei konnte nicht umbenannt werden.")
         return redirect(url_for("index"))
@@ -3348,14 +3372,7 @@ def delete_pdf():
         flash("Ungültige Datei.")
         return redirect(url_for("index"))
 
-    allowed_roots: list[Path] = [OUT_DIR, QUARANTINE_DIR]
-    try:
-        settings = _get_auto_sort_settings()
-        base_dir_raw = str(getattr(settings, "base_dir", "") or "").strip()
-        if settings.enabled and base_dir_raw:
-            allowed_roots.append(Path(base_dir_raw))
-    except Exception:
-        pass
+    allowed_roots: list[Path] = [_user_out_dir(), _user_quarantine_dir(), _user_autosort_dir()]
 
     if not any(_is_path_within(pdf_path, root) for root in allowed_roots if root):
         flash("Löschen nicht erlaubt.")
@@ -3440,7 +3457,7 @@ def confirm_doc_number():
             delivery_note_nr=doc_number,
             date_format=date_fmt,
         )
-        moved_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+        moved_path, move_error = _move_pdf_to_dir(pdf_path, _user_out_dir(), new_filename)
         if move_error or not moved_path:
             _set_result_error(file_id, f"rename_failed: {move_error}")
         else:
@@ -3538,7 +3555,7 @@ def confirm_doc_number_from_view():
             delivery_note_nr=doc_number,
             date_format=INTERNAL_DATE_FORMAT,
         )
-        moved_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+        moved_path, move_error = _move_pdf_to_dir(pdf_path, _user_out_dir(), new_filename)
         if move_error or not moved_path:
             flash("Dokumentnummer gespeichert, aber Umbenennen fehlgeschlagen.")
         else:
@@ -3745,7 +3762,7 @@ def confirm_all_from_view():
             # Label with the user-selected date format.
             date_format=date_fmt if date_fmt in ALLOWED_DATE_FORMATS else INTERNAL_DATE_FORMAT,
         )
-        moved_path, move_error = _move_pdf_to_dir(pdf_path, OUT_DIR, new_filename)
+        moved_path, move_error = _move_pdf_to_dir(pdf_path, _user_out_dir(), new_filename)
         if move_error or not moved_path:
             _set_result_error(file_id, f"rename_failed: {move_error}")
         else:
@@ -4200,25 +4217,19 @@ def download_all():
 
     # ZIP soll die echte Ordnerstruktur abbilden (z.B. Supplier/YYYY-MM/Datei.pdf)
     zip_root = "docaro_fertig"
-    autosort_base = None
-    try:
-        auto_settings = _get_auto_sort_settings()
-        if auto_settings and auto_settings.base_dir:
-            autosort_base = Path(auto_settings.base_dir)
-    except Exception:
-        autosort_base = None
+    autosort_base = _user_autosort_dir()
 
     resolved_autosort_base = None
     resolved_out = None
     resolved_quar = None
     try:
-        resolved_out = OUT_DIR.resolve()
+        resolved_out = _user_out_dir().resolve()
     except OSError:
-        resolved_out = OUT_DIR
+        resolved_out = _user_out_dir()
     try:
-        resolved_quar = QUARANTINE_DIR.resolve()
+        resolved_quar = _user_quarantine_dir().resolve()
     except OSError:
-        resolved_quar = QUARANTINE_DIR
+        resolved_quar = _user_quarantine_dir()
     if autosort_base:
         try:
             resolved_autosort_base = autosort_base.resolve()

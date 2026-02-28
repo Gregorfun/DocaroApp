@@ -177,7 +177,7 @@ class QueueRuntimeManager:
                 self.clear_pdfs(input_dir)
 
             results = self.apply_result_flags(results)
-            results = self.apply_quarantine(results)
+            results = self.apply_quarantine(results, user_scope=user_scope)
             self.merge_last_results(results, user_scope=user_scope)
         except Exception as exc:
             self.count_step_error("background_process_folder", exc)
