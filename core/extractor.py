@@ -50,6 +50,11 @@ except ImportError:
     classify_doc_type = None
 
 try:
+    from core.table_intelligence import extract_table_intelligence
+except ImportError:
+    extract_table_intelligence = None
+
+try:
     from core.review_service import decide_review_status, load_review_settings, DocumentStatus
 except ImportError:
     decide_review_status = None
@@ -2480,6 +2485,11 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         "rotate_hint": "",
         "doc_type_scores": {},
         "doc_type_evidence_by_type": {},
+        "table_intelligence_source": "",
+        "table_intelligence_tables": 0,
+        "table_intelligence_rows": 0,
+        "table_intelligence_preview": [],
+        "table_intelligence_error": "",
         "parsing_failed": False,
         "timing_render_ms": "",
         "timing_ocr_ms": "",
@@ -2768,6 +2778,43 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         except Exception as exc:
             _LOGGER.warning(f"DocType classification failed: {exc}")
 
+    table_text = ""
+    if extract_table_intelligence is not None:
+        try:
+            run_table_intelligence = bool(getattr(config, "TABLE_INTELLIGENCE_ENABLED", True))
+            should_try_tables = run_table_intelligence and (
+                doc_type in {"RECHNUNG", "LIEFERSCHEIN", "KOMMISSIONIERLISTE"}
+                or doc_type_confidence < 0.85
+                or supplier_canonical in ("", "Unbekannt")
+            )
+            if should_try_tables:
+                table_summary = extract_table_intelligence(
+                    pdf_path,
+                    enabled=run_table_intelligence,
+                    max_pages=max(1, int(getattr(config, "TABLE_INTELLIGENCE_MAX_PAGES", 2))),
+                )
+                result["table_intelligence_source"] = table_summary.source
+                result["table_intelligence_tables"] = int(table_summary.tables_count)
+                result["table_intelligence_rows"] = int(table_summary.rows_count)
+                result["table_intelligence_preview"] = table_summary.preview
+                result["table_intelligence_error"] = table_summary.error or ""
+                table_text = table_summary.text or ""
+
+                if table_text and classify_doc_type is not None and doc_type_confidence < 0.80:
+                    enriched_for_doctype = f"{combined_text}\n{table_text}".strip()
+                    doctype_enriched = classify_doc_type(enriched_for_doctype, supplier_canonical)
+                    if float(doctype_enriched.confidence or 0.0) >= float(doc_type_confidence or 0.0):
+                        doc_type = doctype_enriched.doc_type
+                        doc_type_confidence = doctype_enriched.confidence
+                        doc_type_evidence = ", ".join(doctype_enriched.evidence[:3])
+                        doc_type_scores = getattr(doctype_enriched, "scores", {}) or {}
+                        doc_type_evidence_by_type = getattr(doctype_enriched, "evidence_by_type", {}) or {}
+        except Exception as exc:
+            result["table_intelligence_error"] = f"table_intelligence_failed: {exc}"
+            _LOGGER.warning("table intelligence failed: %s", exc)
+
+    combined_text_for_extraction = "\n".join([t for t in (combined_text, table_text) if t])
+
     # Supplier + DocType Coupling / Cross-check
     try:
         # 0) Rollenbasierte KSR-Erkennung (Beförderer/Abfallentsorger)
@@ -2794,12 +2841,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
         role_candidates: List[Dict[str, object]] = []
         role_texts = [
-            _extract_role_block(combined_text, "Beförderer (Name, Anschrift)"),
-            _extract_role_block(combined_text, "Befoerderer (Name, Anschrift)"),
-            _extract_role_block(combined_text, "Beförderer"),
-            _extract_role_block(combined_text, "Befoerderer"),
-            _extract_role_block(combined_text, "Abfallentsorger (Name, Anschrift)"),
-            _extract_role_block(combined_text, "Abfallentsorger"),
+            _extract_role_block(combined_text_for_extraction, "Beförderer (Name, Anschrift)"),
+            _extract_role_block(combined_text_for_extraction, "Befoerderer (Name, Anschrift)"),
+            _extract_role_block(combined_text_for_extraction, "Beförderer"),
+            _extract_role_block(combined_text_for_extraction, "Befoerderer"),
+            _extract_role_block(combined_text_for_extraction, "Abfallentsorger (Name, Anschrift)"),
+            _extract_role_block(combined_text_for_extraction, "Abfallentsorger"),
         ]
         role_joined = "\n".join([t for t in role_texts if t])
         role_norm = _normalize_supplier_text(role_joined)
@@ -2854,7 +2901,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         if supplier_candidates:
             current = (supplier_canonical or "").strip()
             if current.lower() == "franz bracht":
-                norm = _normalize_supplier_text(combined_text)
+                norm = _normalize_supplier_text(combined_text_for_extraction)
                 customer_markers = [
                     "kunde",
                     "warenempfaenger",
@@ -2904,7 +2951,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
         # 2) ÜBERNAHMESCHEIN: KSR boost (Fallback wenn role_block nichts ergab)
         if doc_type == "ÜBERNAHMESCHEIN":
-            seg = segment_text(combined_text, header_max_lines=40, recipient_max_lines=20)
+            seg = segment_text(combined_text_for_extraction, header_max_lines=40, recipient_max_lines=20)
             hb_norm = _normalize_supplier_text("\n".join(seg.header_lines + seg.body_lines))
             if re.search(r"\bksr\b", hb_norm, flags=re.IGNORECASE):
                 supplier_canonical = "KSR"
@@ -2944,7 +2991,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     if extract_doc_number is not None:
         try:
             # Verwende supplier-spezifische Extraktion mit CANONICAL name + DocType
-            doc_result = extract_doc_number(combined_text, supplier_canonical, doc_type)
+            doc_result = extract_doc_number(combined_text_for_extraction, supplier_canonical, doc_type)
             if doc_result.doc_number:
                 doc_number = doc_result.doc_number
                 doc_number_source = doc_result.source_field
@@ -2954,7 +3001,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     # Fallback: alte Methode
     if not doc_number:
-        numbers = extract_document_numbers(combined_text)
+        numbers = extract_document_numbers(combined_text_for_extraction)
         doc_number = numbers.get("delivery_note_no") or numbers.get("order_no")
         if doc_number:
             doc_number_confidence = numbers.get("confidence", "medium")
@@ -2963,7 +3010,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     # Wenn keine Nummer gefunden: ohneNr + Hash
     if not doc_number:
         if generate_fallback_identifier is not None:
-            fallback_hash = generate_fallback_identifier(combined_text)
+            fallback_hash = generate_fallback_identifier(combined_text_for_extraction)
             doc_number = f"ohneNr_{fallback_hash}"
         else:
             doc_number = "ohneNr"

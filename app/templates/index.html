@@ -315,6 +315,8 @@
                       <div><span class="detail-label">Fehler:</span> <span data-field="error">{{ item.error or '-' }}</span></div>
                       <div><span class="detail-label">OCR:</span> <span data-field="tesseract_status">{{ item.tesseract_status or '-' }}</span></div>
                       <div><span class="detail-label">Poppler:</span> <span data-field="poppler_status">{{ item.poppler_status or '-' }}</span></div>
+                      <div><span class="detail-label">Tabellen-Quelle:</span> <span data-field="table_intelligence_source">{{ item.table_intelligence_source or '-' }}</span></div>
+                      <div><span class="detail-label">Tabellen:</span> <span data-field="table_intelligence_tables">{{ item.table_intelligence_tables or 0 }}</span> / Zeilen: <span data-field="table_intelligence_rows">{{ item.table_intelligence_rows or 0 }}</span></div>
                       <div>
                         <span class="detail-label">Auto-Sort:</span>
                         <span data-field="auto_sort_status">{{ item.auto_sort_status or '-' }}</span>
@@ -342,6 +344,10 @@
                             <div>
                               <span class="detail-label">DocType-Evidence:</span>
                               <pre class="debug-pre" data-field="doc_type_evidence_by_type">{% if item.doc_type_evidence_by_type %}{{ item.doc_type_evidence_by_type|tojson(indent=2) }}{% else %}-{% endif %}</pre>
+                            </div>
+                            <div>
+                              <span class="detail-label">Table-Preview:</span>
+                              <pre class="debug-pre" data-field="table_intelligence_preview">{% if item.table_intelligence_preview %}{{ item.table_intelligence_preview|tojson(indent=2) }}{% else %}-{% endif %}</pre>
                             </div>
                           </div>
                         </details>

@@ -61,6 +61,9 @@ python tools/report_performance_percentiles.py
 - Supplier-Profile (`config/supplier_profiles.json`, Vorlage: `config/supplier_profiles.example.json`)
 - Dubletten-Erkennung im Upload via SHA-256 (SQLite-Registry)
 - Human-in-the-loop Learning: Korrekturen werden zusätzlich als Samples in `data/ml/ground_truth.jsonl` geschrieben
+- Tabellen-Intelligence (optional): zusätzliche Tabellenzeilen aus PDFs werden für `doc_type`/`doc_number` genutzt
+  - Aktivierung: `DOCARO_TABLE_INTELLIGENCE_ENABLED=1`
+  - Optionaler externer Adapter: `DOCARO_HF_TABLE_WEBHOOK` (sonst lokaler `pdfplumber`-Fallback)
 
 ## 🚨 Exception Tracking (Sentry)
 

@@ -38,6 +38,11 @@ class Config:
     PADDLEOCR_LANG = os.getenv("DOCARO_PADDLEOCR_LANG", "german")
     PADDLEOCR_FALLBACK_THRESHOLD = int(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle
     PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
+    # Tabellen-Intelligence (inspiriert von HF Spaces wie Table-to-CSV / table-extraction)
+    TABLE_INTELLIGENCE_ENABLED = os.getenv("DOCARO_TABLE_INTELLIGENCE_ENABLED", "1") == "1"
+    TABLE_INTELLIGENCE_MAX_PAGES = int(os.getenv("DOCARO_TABLE_INTELLIGENCE_MAX_PAGES", "2"))
+    HF_TABLE_WEBHOOK = os.getenv("DOCARO_HF_TABLE_WEBHOOK", "")
+    HF_TABLE_TIMEOUT_SECONDS = float(os.getenv("DOCARO_HF_TABLE_TIMEOUT_SECONDS", "6"))
     TESSERACT_CMD = os.getenv("DOCARO_TESSERACT_CMD")
     POPPLER_BIN = os.getenv("DOCARO_POPPLER_BIN")
     # Auto-Sort Defaults (können via Settings-Seite überschrieben werden)
