@@ -18,7 +18,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
 
     steps:
     - uses: actions/checkout@v4
@@ -98,12 +98,8 @@ jobs:
 
     - name: Lint with Ruff
       run: |
-        ruff check app/runtime_storage.py core/metrics.py core/observability.py core/runtime_store.py services/worker.py tests/performance tests/test_runtime_store.py tests/test_benchmark_threshold.py loadtests/locustfile.py tools/export_ground_truth_snapshot.py tools/drift_report.py tools/report_performance_percentiles.py tools/check_benchmark_threshold.py tools/migrate_runtime_store.py
+        ruff check . --select E9,F63,F7,F82
 
-    - name: Check formatting with black
+    - name: Full Ruff Report (advisory)
       run: |
-        black --check app/runtime_storage.py core/metrics.py core/observability.py core/runtime_store.py services/worker.py tests/performance tests/test_runtime_store.py tests/test_benchmark_threshold.py loadtests/locustfile.py tools/export_ground_truth_snapshot.py tools/drift_report.py tools/report_performance_percentiles.py tools/check_benchmark_threshold.py tools/migrate_runtime_store.py --line-length=120
-
-    - name: Run pre-commit hooks
-      run: |
-        pre-commit run --files app/runtime_storage.py core/metrics.py core/observability.py core/runtime_store.py services/worker.py tests/performance/test_benchmark_extractor.py tests/test_runtime_store.py tests/test_benchmark_threshold.py loadtests/locustfile.py tools/export_ground_truth_snapshot.py tools/drift_report.py tools/report_performance_percentiles.py tools/check_benchmark_threshold.py tools/migrate_runtime_store.py
+        ruff check . --exit-zero

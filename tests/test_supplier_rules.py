@@ -1,6 +1,3 @@
-import pytest
-
-
 def test_wfi_detected_from_letterhead_not_recipient():
     from core.extractor import detect_supplier_detailed
 
@@ -37,7 +34,7 @@ Pos 1: Test
 """
 
     supplier, conf, source, guess, cands = detect_supplier_detailed(text)
-        assert supplier == "Orjohann Kraft"
+    assert supplier == "Orjohann Kraft"
     assert conf >= 0.80
 
 

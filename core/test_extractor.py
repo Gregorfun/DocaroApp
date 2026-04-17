@@ -2,22 +2,23 @@ import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Pfad für Imports setzen
 BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from core.extractor import (
+from core.extractor import (  # noqa: E402
     extract_date,
     extract_date_with_priority,
+    _extract_candidates_from_lines,
+    _select_best_candidate,
     detect_supplier,
     detect_supplier_detailed,
     normalize_text,
     load_suppliers_db,
     build_new_filename,
-    INTERNAL_DATE_FORMAT,
 )
 
 
@@ -70,6 +71,37 @@ class TestExtractorDates(unittest.TestCase):
         dt, source = extract_date_with_priority(text)
         self.assertEqual(dt, datetime(2025, 11, 4))
         self.assertEqual(source, "lieferdatum")
+
+    def test_dekra_candidate_selection_ignores_ez_date(self):
+        text = """
+        (6) EZ-Kl. 16 EKR SELBSTF.ARBEITSMASCH.
+        EZ 25.04.2022
+        Berichts-Nr. F087046002827
+        vom 07.04.2026, 09:34
+        HU-Prüfung
+        """
+        candidates = _extract_candidates_from_lines(text.splitlines(), "ocr", 0.70)
+        best = _select_best_candidate(candidates)
+
+        self.assertIsNotNone(best)
+        self.assertEqual(best["date"], datetime(2026, 4, 7))
+        self.assertNotEqual(best["date"], datetime(2022, 4, 25))
+        self.assertEqual(best["label"], "dekra_report_date")
+        self.assertGreaterEqual(best["confidence"], 0.90)
+
+    def test_dekra_candidate_selection_handles_same_line_report_date(self):
+        text = """
+        DEKRA Automobil
+        Erstzulassung 14.11.2021
+        Berichts-Nr. F087046012345 vom 18.03.2026
+        nächste HU fällig März 2027
+        """
+        candidates = _extract_candidates_from_lines(text.splitlines(), "ocr", 0.70)
+        best = _select_best_candidate(candidates)
+
+        self.assertIsNotNone(best)
+        self.assertEqual(best["date"], datetime(2026, 3, 18))
+        self.assertEqual(best["label"], "dekra_report_date")
 
 
 class TestSupplierDetection(unittest.TestCase):
@@ -144,14 +176,14 @@ class TestBuildNewFilename(unittest.TestCase):
 
 
 class TestLoadSuppliersDB(unittest.TestCase):
-    @patch('core.extractor.SUPPLIERS_DB_PATH')
+    @patch("core.extractor.SUPPLIERS_DB_PATH")
     def test_load_suppliers_db(self, mock_path):
         mock_path.exists.return_value = True
         mock_path.read_text.return_value = '{"suppliers": {"ABC": {"name": "ABC GmbH"}}}'
         db = load_suppliers_db()
-        self.assertIn("ABC", db['suppliers'])
+        self.assertIn("ABC", db["suppliers"])
 
-    @patch('core.extractor.SUPPLIERS_DB_PATH')
+    @patch("core.extractor.SUPPLIERS_DB_PATH")
     def test_load_suppliers_db_missing_file(self, mock_path):
         mock_path.exists.return_value = False
         db = load_suppliers_db()

@@ -1,4 +1,5 @@
 ﻿from __future__ import annotations
+
 # ruff: noqa: E402
 
 from io import BytesIO
@@ -55,24 +56,30 @@ from core.extractor import (
     INTERNAL_DATE_FORMAT,
 )
 
+
 # Lazy-Loading für Docling (nur bei Bedarf laden)
 def is_docling_available():
     """Prüft ob Docling verfügbar ist ohne es zu laden."""
     try:
         import importlib.util
+
         spec = importlib.util.find_spec("docling")
         return spec is not None
     except Exception:
         return False
 
+
 def get_docling_extractor():
     """Lädt Docling-Extractor lazy (nur wenn benötigt)."""
     try:
         from core.docling_extractor import DoclingExtractor
+
         return DoclingExtractor()
     except Exception as e:
         logger.error(f"Docling-Extractor konnte nicht geladen werden: {e}")
         return None
+
+
 from utils import normalize_text
 from config import Config
 from redis import Redis
@@ -120,7 +127,7 @@ HISTORY_PATH = config.HISTORY_PATH
 LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 RUNTIME_DB_PATH = DATA_DIR / "runtime_state.db"
 SUPPLIER_PROFILES_PATH = BASE_DIR / "config" / "supplier_profiles.json"
-SPECIAL_ADMIN_EMAIL = os.getenv("DOCARO_SPECIAL_ADMIN_EMAIL", "gregor.machuletz@gmx.de").strip().lower()
+SPECIAL_ADMIN_EMAIL = (os.getenv("DOCARO_SPECIAL_ADMIN_EMAIL") or "").strip().lower()
 
 # Download-Cleanup ("Refresh" nach Download)
 PRUNE_AFTER_DOWNLOAD = os.getenv("DOCARO_PRUNE_AFTER_DOWNLOAD", "1") == "1"
@@ -128,9 +135,9 @@ DELETE_FILES_AFTER_DOWNLOAD = os.getenv("DOCARO_DELETE_FILES_AFTER_DOWNLOAD", "0
 TMP_RETENTION_HOURS = int(os.getenv("DOCARO_TMP_RETENTION_HOURS", "48"))
 
 # Setup Redis Queue
-redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_conn = Redis.from_url(redis_url)
-q = Queue('default', connection=redis_conn, default_timeout=3600)  # 1h timeout
+q = Queue("default", connection=redis_conn, default_timeout=3600)  # 1h timeout
 QUEUE_MAX_DEPTH = int(os.getenv("DOCARO_QUEUE_MAX_DEPTH", "200"))
 
 # Stateless (optional): Runtime-State beim Service-Start löschen.
@@ -180,6 +187,7 @@ def _cleanup_runtime_state_on_exit() -> None:
         )
     except Exception:
         pass
+
 
 # Quarantäne-Schwellen: unsicher, wenn darunter (oder wenn Datum/Lieferant fehlt)
 QUARANTINE_SUPPLIER_CONF_MIN = float(os.getenv("DOCARO_QUAR_SUPPLIER_MIN", "0.85"))
@@ -275,7 +283,9 @@ def _ensure_audit_entry_for_current_result(file_id: str, pdf_path: Path) -> None
             ocr_method=None,
             processing_time=0.0,
             needs_review=bool(result.get("needs_review")),
-            review_reason=",".join(result.get("review_reasons") or []) if isinstance(result.get("review_reasons"), list) else None,
+            review_reason=(
+                ",".join(result.get("review_reasons") or []) if isinstance(result.get("review_reasons"), list) else None
+            ),
         )
         audit_logger.save_audit_entry(entry)
     except Exception:
@@ -305,10 +315,12 @@ def get_supplier_canonicalizer():
     if _supplier_canonicalizer is None:
         try:
             from core.supplier_canonicalizer import get_supplier_canonicalizer as _get_canon
+
             _supplier_canonicalizer = _get_canon()
         except Exception as e:
             # Logger könnte noch nicht initialisiert sein
             import logging
+
             logging.warning(f"Supplier Canonicalizer nicht verfügbar: {e}")
             _supplier_canonicalizer = False  # Merken dass Versuch fehlschlug
     return _supplier_canonicalizer if _supplier_canonicalizer is not False else None
@@ -519,12 +531,7 @@ def _collect_special_admin_overview() -> dict:
 def _looks_like_windows_drive_path(value: str) -> bool:
     raw = (value or "").strip()
     # e.g. C:\Users\... or C:/Users/...
-    return (
-        len(raw) >= 3
-        and raw[0] in string.ascii_letters
-        and raw[1] == ":"
-        and (raw[2] == "\\" or raw[2] == "/")
-    )
+    return len(raw) >= 3 and raw[0] in string.ascii_letters and raw[1] == ":" and (raw[2] == "\\" or raw[2] == "/")
 
 
 def _windows_path_not_supported_on_linux_message(path_value: str) -> str:
@@ -570,7 +577,7 @@ def _display_inbox_dir(inbox_dir: Path) -> str:
         return ""
     base_prefix = str(BASE_DIR).rstrip("/") + "/"
     if raw.startswith(base_prefix):
-        rest = raw[len(base_prefix):]
+        rest = raw[len(base_prefix) :]
         if _looks_like_windows_drive_path(rest):
             return rest
         try:
@@ -584,6 +591,7 @@ def _save_auto_sort_settings(settings: AutoSortSettings) -> None:
     global AUTO_SORT_SETTINGS
     AUTO_SORT_SETTINGS = settings
     save_auto_sort_settings(config.SETTINGS_PATH, settings)
+
 
 try:
     import msvcrt  # type: ignore
@@ -628,6 +636,7 @@ def _normalize_date_fmt(value: str) -> str:
         return "%Y-%m-%d"
     return raw
 
+
 app = Flask(__name__)
 # SECRET_KEY aus config.py (persistent gespeichert in data/.secret_key)
 app.secret_key = config.SECRET_KEY
@@ -644,10 +653,12 @@ app.config["DEBUG"] = DEBUG_MODE
 try:
     import sys
     from pathlib import Path
+
     app_dir = Path(__file__).parent
     if str(app_dir) not in sys.path:
         sys.path.insert(0, str(app_dir))
     from review_routes import review_bp
+
     app.register_blueprint(review_bp)
     logger.info("Review-Routes erfolgreich registriert")
 except ImportError as e:
@@ -682,8 +693,6 @@ def _install_rq_dashboard() -> None:
 
 
 _install_rq_dashboard()
-
-
 
 
 def _log_exception(context: str, exc: Exception) -> None:
@@ -818,9 +827,7 @@ def _apply_rate_limits_and_csrf():
     # CSRF check for mutating requests (same-site fallback for legacy forms).
     expected = _ensure_csrf_token()
     provided = (
-        request.headers.get("X-CSRF-Token")
-        or request.form.get("csrf_token")
-        or request.headers.get("X-XSRF-TOKEN")
+        request.headers.get("X-CSRF-Token") or request.form.get("csrf_token") or request.headers.get("X-XSRF-TOKEN")
     )
     strict_percent = int(os.getenv("DOCARO_CSRF_CANARY_PERCENT", "0"))
     strict_mode = os.getenv("DOCARO_CSRF_STRICT", "0") == "1" or _in_canary(strict_percent, "csrf-strict")
@@ -838,6 +845,7 @@ def _apply_rate_limits_and_csrf():
 
 
 if not DEBUG_MODE:
+
     @app.errorhandler(Exception)
     def _handle_exception(exc: Exception):
         if isinstance(exc, HTTPException):
@@ -898,7 +906,9 @@ def _mark_results_downloaded(out_names: set[str], user_scope: str = "") -> None:
         _save_last_results(results, user_scope=user_scope)
 
 
-def _remove_session_entries_for_sid(sid: str, file_ids: set[str] | None = None, filenames: set[str] | None = None) -> None:
+def _remove_session_entries_for_sid(
+    sid: str, file_ids: set[str] | None = None, filenames: set[str] | None = None
+) -> None:
     if not sid:
         return
     data = _load_session_files()
@@ -1064,6 +1074,7 @@ def settings_page():
     # Review Settings laden
     try:
         from core.review_service import load_review_settings
+
         review_settings = load_review_settings(config.DATA_DIR / "settings.json")
         # Merge in settings object
         settings.gate_supplier_min = review_settings.gate_supplier_min
@@ -1110,13 +1121,14 @@ def settings_save():
     if mode not in ("move", "copy"):
         mode = "move"
     try:
-        conf_raw = str(
-            form.get("confidence_threshold", config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT)
-        ).strip()
+        conf_raw = str(form.get("confidence_threshold", config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT)).strip()
         confidence_threshold = float(conf_raw.replace(",", "."))
     except ValueError:
         confidence_threshold = config.AUTO_SORT_CONFIDENCE_THRESHOLD_DEFAULT
-    fallback_folder = form.get("fallback_folder", config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT).strip() or config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT
+    fallback_folder = (
+        form.get("fallback_folder", config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT).strip()
+        or config.AUTO_SORT_FALLBACK_FOLDER_DEFAULT
+    )
     fallback_folder = sanitize_supplier_name(fallback_folder)
 
     inbox_dir_raw = form.get("inbox_dir", "").strip() or str(config.INBOX_DIR)
@@ -1162,7 +1174,7 @@ def settings_save():
             gate_doc_number_min=gate_doc_number_min,
             auto_finalize_enabled=auto_finalize_enabled,
             autosort_enabled=enabled,
-            autosort_base_dir=base_dir
+            autosort_base_dir=base_dir,
         )
 
         save_review_settings(config.DATA_DIR / "settings.json", review_settings)
@@ -1204,18 +1216,20 @@ def status_json():
             "review_priority_score": recent_item.get("review_priority_score") or "",
             "needs_review": bool(recent_item.get("needs_review")),
         }
-        return jsonify({
-            "ok": True,
-            "user_scope": _current_user_scope(),
-            "processing": processing,
-            "active_job_id": active_job_id,
-            "active_job_status": active_job_status,
-            "queue_depth": int(q.count),
-            "files": _list_finished(),
-            "results_count": len(results),
-            "progress": progress,
-            "recent_result": recent_result,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "user_scope": _current_user_scope(),
+                "processing": processing,
+                "active_job_id": active_job_id,
+                "active_job_status": active_job_status,
+                "queue_depth": int(q.count),
+                "files": _list_finished(),
+                "results_count": len(results),
+                "progress": progress,
+                "recent_result": recent_result,
+            }
+        )
     except Exception as exc:
         _log_exception("status:handler", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1280,10 +1294,10 @@ def metrics_endpoint():
 def analyze_docling():
     """Analysiert hochgeladene PDF mit Docling für Vorschau."""
     # TEMPORÄR DEAKTIVIERT - Docling-Import verursacht Server-Crash
-    return jsonify({
-        "ok": False,
-        "error": "Docling-Analyse vorübergehend deaktiviert (Server-Stabilitätsprobleme)"
-    }), 503
+    return (
+        jsonify({"ok": False, "error": "Docling-Analyse vorübergehend deaktiviert (Server-Stabilitätsprobleme)"}),
+        503,
+    )
 
     import signal
     from contextlib import contextmanager
@@ -1293,7 +1307,7 @@ def analyze_docling():
         def timeout_handler(signum, frame):
             raise TimeoutError(f"Docling-Analyse überschritt {seconds}s Timeout")
 
-        if hasattr(signal, 'SIGALRM'):
+        if hasattr(signal, "SIGALRM"):
             old_handler = signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(seconds)
             try:
@@ -1306,10 +1320,10 @@ def analyze_docling():
 
     try:
         if not is_docling_available():
-            return jsonify({
-                "ok": False,
-                "error": "Docling ist nicht installiert. Installiere mit: pip install docling"
-            }), 400
+            return (
+                jsonify({"ok": False, "error": "Docling ist nicht installiert. Installiere mit: pip install docling"}),
+                400,
+            )
 
         uploaded = request.files.getlist("files")
         if not uploaded:
@@ -1317,25 +1331,16 @@ def analyze_docling():
 
         uploaded = [f for f in uploaded if getattr(f, "filename", None)]
         if not uploaded:
-            return jsonify({
-                "ok": False,
-                "error": "Keine Dateien hochgeladen"
-            }), 400
+            return jsonify({"ok": False, "error": "Keine Dateien hochgeladen"}), 400
 
         try:
             extractor = get_docling_extractor()
         except Exception as e:
             logger.error(f"Docling Extractor Init fehlgeschlagen: {e}")
-            return jsonify({
-                "ok": False,
-                "error": f"Docling nicht verfügbar: {str(e)}"
-            }), 500
+            return jsonify({"ok": False, "error": f"Docling nicht verfügbar: {str(e)}"}), 500
 
         if not extractor:
-            return jsonify({
-                "ok": False,
-                "error": "Docling Extractor konnte nicht initialisiert werden"
-            }), 500
+            return jsonify({"ok": False, "error": "Docling Extractor konnte nicht initialisiert werden"}), 500
 
         results = []
         TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1352,10 +1357,7 @@ def analyze_docling():
                 storage.save(temp_path)
             except Exception as e:
                 logger.error(f"Fehler beim Speichern von {safe_name}: {e}")
-                results.append({
-                    "filename": safe_name,
-                    "error": f"Upload fehlgeschlagen: {str(e)}"
-                })
+                results.append({"filename": safe_name, "error": f"Upload fehlgeschlagen: {str(e)}"})
                 continue
 
             try:
@@ -1367,64 +1369,54 @@ def analyze_docling():
                     supplier = extractor.extract_supplier(temp_path)
                     date = extractor.extract_date(temp_path, supplier)
 
-                    results.append({
-                        "filename": safe_name,
-                        "text": text[:500] + "..." if len(text) > 500 else text,
-                        "text_length": len(text),
-                        "metadata": metadata,
-                        "tables_found": len(tables),
-                        "supplier": supplier,
-                        "date": date.isoformat() if date else None,
-                    })
+                    results.append(
+                        {
+                            "filename": safe_name,
+                            "text": text[:500] + "..." if len(text) > 500 else text,
+                            "text_length": len(text),
+                            "metadata": metadata,
+                            "tables_found": len(tables),
+                            "supplier": supplier,
+                            "date": date.isoformat() if date else None,
+                        }
+                    )
             except TimeoutError:
                 logger.error(f"Timeout bei Docling-Analyse von {safe_name}")
-                results.append({
-                    "filename": safe_name,
-                    "error": "Verarbeitung zu langsam (Timeout)"
-                })
+                results.append({"filename": safe_name, "error": "Verarbeitung zu langsam (Timeout)"})
             except Exception as e:
                 logger.error(f"Fehler bei Docling-Analyse von {safe_name}: {e}", exc_info=True)
-                results.append({
-                    "filename": safe_name,
-                    "error": str(e)
-                })
+                results.append({"filename": safe_name, "error": str(e)})
             finally:
                 try:
                     temp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
 
-        return jsonify({
-            "ok": True,
-            "results": results,
-            "docling_available": True
-        })
+        return jsonify({"ok": True, "results": results, "docling_available": True})
 
     except Exception as exc:
         _log_exception("analyze_docling:handler", exc)
-        return jsonify({
-            "ok": False,
-            "error": f"Unerwarteter Fehler: {str(exc)}"
-        }), 500
+        return jsonify({"ok": False, "error": f"Unerwarteter Fehler: {str(exc)}"}), 500
 
 
 @app.get("/docling_status.json")
 def docling_status_json():
     """Gibt Status der Docling-Verfügbarkeit zurück."""
     try:
-        return jsonify({
-            "ok": True,
-            "docling_available": is_docling_available(),
-            "message": "Docling ist verfügbar" if is_docling_available()
-                      else "Docling nicht installiert - installiere mit: pip install docling"
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "docling_available": is_docling_available(),
+                "message": (
+                    "Docling ist verfügbar"
+                    if is_docling_available()
+                    else "Docling nicht installiert - installiere mit: pip install docling"
+                ),
+            }
+        )
     except Exception as exc:
         logger.error(f"Fehler bei docling_status: {exc}")
-        return jsonify({
-            "ok": False,
-            "docling_available": False,
-            "error": str(exc)
-        }), 500
+        return jsonify({"ok": False, "docling_available": False, "error": str(exc)}), 500
 
 
 @app.post("/chunk_document")
@@ -1432,10 +1424,7 @@ def chunk_document():
     """Chunked ein Dokument für RAG/LLM-Verwendung mit docling-core."""
     try:
         if not is_docling_available():
-            return jsonify({
-                "ok": False,
-                "error": "Docling ist nicht installiert"
-            }), 400
+            return jsonify({"ok": False, "error": "Docling ist nicht installiert"}), 400
 
         uploaded = request.files.getlist("files")
         if not uploaded:
@@ -1443,20 +1432,14 @@ def chunk_document():
 
         uploaded = [f for f in uploaded if getattr(f, "filename", None)]
         if not uploaded:
-            return jsonify({
-                "ok": False,
-                "error": "Keine Dateien hochgeladen"
-            }), 400
+            return jsonify({"ok": False, "error": "Keine Dateien hochgeladen"}), 400
 
         max_tokens = int(request.form.get("max_tokens", 512))
         tokenizer = request.form.get("tokenizer", "sentence")
 
         extractor = get_docling_extractor()
         if not extractor:
-            return jsonify({
-                "ok": False,
-                "error": "Docling Extractor konnte nicht initialisiert werden"
-            }), 500
+            return jsonify({"ok": False, "error": "Docling Extractor konnte nicht initialisiert werden"}), 500
 
         results = []
         TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1474,36 +1457,29 @@ def chunk_document():
             try:
                 chunks = extractor.chunk_document(temp_path, tokenizer=tokenizer, max_tokens=max_tokens)
 
-                results.append({
-                    "filename": safe_name,
-                    "num_chunks": len(chunks),
-                    "chunks": chunks[:5],  # Nur erste 5 Chunks in Preview
-                    "tokenizer": tokenizer,
-                    "max_tokens": max_tokens
-                })
+                results.append(
+                    {
+                        "filename": safe_name,
+                        "num_chunks": len(chunks),
+                        "chunks": chunks[:5],  # Nur erste 5 Chunks in Preview
+                        "tokenizer": tokenizer,
+                        "max_tokens": max_tokens,
+                    }
+                )
             except Exception as e:
                 logger.error(f"Fehler beim Chunken von {safe_name}: {e}")
-                results.append({
-                    "filename": safe_name,
-                    "error": str(e)
-                })
+                results.append({"filename": safe_name, "error": str(e)})
             finally:
                 try:
                     temp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
 
-        return jsonify({
-            "ok": True,
-            "results": results
-        })
+        return jsonify({"ok": True, "results": results})
 
     except Exception as exc:
         _log_exception("chunk_document:handler", exc)
-        return jsonify({
-            "ok": False,
-            "error": str(exc)
-        }), 500
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.post("/upload")
@@ -1617,7 +1593,7 @@ def upload():
         job = q.enqueue(
             background_process_upload,
             args=(upload_dir, date_fmt, user_scope),
-            job_timeout='30m',
+            job_timeout="30m",
             result_ttl=86400,
         )
         _tag_job_owner(job, user_scope)
@@ -1642,9 +1618,7 @@ def _list_finished():
     files = [
         item.get("out_name")
         for item in results
-        if item.get("out_name")
-        and not item.get("quarantined")
-        and not item.get("downloaded_at")
+        if item.get("out_name") and not item.get("quarantined") and not item.get("downloaded_at")
     ]
     return sorted({name for name in files if name})
 
@@ -1669,6 +1643,7 @@ def _check_processing_timeout() -> None:
         if not flag_path.exists():
             return
         from datetime import datetime, timedelta
+
         mtime = datetime.fromtimestamp(flag_path.stat().st_mtime)
         # If we see no progress updates for a while, assume stuck worker/job.
         try:
@@ -1689,6 +1664,7 @@ def _check_processing_timeout() -> None:
             _clear_progress(user_scope=user_scope)
     except Exception as e:
         logger.warning(f"Error checking processing timeout: {e}")
+
 
 def _get_session_id() -> str:
     sid = session.get("sid")
@@ -1823,6 +1799,7 @@ def _session_results_path(user_scope: str = "") -> Path:
     scope = _current_user_scope(user_scope)
     return _user_tmp_dir(scope) / "last_results.json"
 
+
 def _processing_flag_path(user_scope: str = "") -> Path:
     scope = _current_user_scope(user_scope)
     return _user_tmp_dir(scope) / "processing.flag"
@@ -1874,6 +1851,7 @@ def _load_progress(user_scope: str = "") -> Optional[dict]:
     except Exception:
         return None
 
+
 def _set_processing(value: bool, user_scope: str = "") -> None:
     try:
         flag_path = _processing_flag_path(user_scope=user_scope)
@@ -1884,6 +1862,7 @@ def _set_processing(value: bool, user_scope: str = "") -> None:
                 flag_path.unlink()
     except OSError:
         pass
+
 
 def _is_processing(user_scope: str = "") -> bool:
     try:
@@ -1919,6 +1898,7 @@ def _refresh_runtime_metrics() -> None:
             _last_runtime_store_checkpoint = now
     except Exception as exc:
         count_step_error("runtime_store_checkpoint", exc)
+
 
 def background_process_upload(upload_dir: Path, date_fmt: str, user_scope: str = "") -> None:
     background_process_folder(
@@ -2332,7 +2312,9 @@ def _attach_file_ids(results):
 def _filter_results(results, incomplete_only: bool):
     if not results or not incomplete_only:
         return results
-    return [item for item in results if item.get("date_missing") or item.get("supplier_missing") or item.get("needs_review")]
+    return [
+        item for item in results if item.get("date_missing") or item.get("supplier_missing") or item.get("needs_review")
+    ]
 
 
 def _session_filenames() -> set[str]:
@@ -3503,7 +3485,7 @@ def confirm_review_state():
         return redirect(url_for("index"))
 
     # Setze needs_review basierend auf Status
-    needs_review = (raw_val == "in_bearbeitung")
+    needs_review = raw_val == "in_bearbeitung"
     results = _load_last_results() or []
     for item in results:
         if item.get("file_id") == file_id:
@@ -3563,7 +3545,9 @@ def delete_pdf():
 
     # Session mapping best-effort entfernen
     try:
-        _remove_session_entries_for_sid(_get_session_id(), file_ids={file_id}, filenames={filename} if filename else None)
+        _remove_session_entries_for_sid(
+            _get_session_id(), file_ids={file_id}, filenames={filename} if filename else None
+        )
     except Exception:
         pass
 
@@ -4255,7 +4239,9 @@ def download(filename: str):
     try:
         # Meta für Clients (z.B. Debug/Automatisierung)
         current = _result_for_filename(safe_name) or {}
-        resp.headers["X-Docaro-AutoSort-Reason"] = str(current.get("auto_sort_reason_code") or current.get("auto_sort_reason") or "")
+        resp.headers["X-Docaro-AutoSort-Reason"] = str(
+            current.get("auto_sort_reason_code") or current.get("auto_sort_reason") or ""
+        )
         resp.headers["X-Docaro-Final-Path"] = str(current.get("export_path") or str(pdf_path) or "")
     except Exception:
         pass
@@ -4492,36 +4478,34 @@ def get_stats():
 
         # Zähle Dokumente
         total_count = len(history_data)
-        today_count = sum(1 for h in history_data
-                         if datetime.fromisoformat(h.get('timestamp', '1970-01-01')) >= today_start)
-        week_count = sum(1 for h in history_data
-                        if datetime.fromisoformat(h.get('timestamp', '1970-01-01')) >= week_start)
+        today_count = sum(
+            1 for h in history_data if datetime.fromisoformat(h.get("timestamp", "1970-01-01")) >= today_start
+        )
+        week_count = sum(
+            1 for h in history_data if datetime.fromisoformat(h.get("timestamp", "1970-01-01")) >= week_start
+        )
 
         # Berechne durchschnittliche Verarbeitungszeit (falls vorhanden)
-        processing_times = [h.get('processing_time', 0) for h in history_data if h.get('processing_time', 0) > 0]
+        processing_times = [h.get("processing_time", 0) for h in history_data if h.get("processing_time", 0) > 0]
         avg_time = sum(processing_times) / len(processing_times) if processing_times else 3.2
 
         # Erfolgsrate (Dokumente ohne Fehler)
-        success_count = sum(1 for h in history_data if not h.get('error'))
+        success_count = sum(1 for h in history_data if not h.get("error"))
         success_rate = round((success_count / total_count * 100) if total_count > 0 else 95, 1)
 
-        return jsonify({
-            'totalCount': total_count,
-            'todayCount': today_count,
-            'weekCount': week_count,
-            'avgTime': round(avg_time, 1),
-            'successRate': success_rate
-        })
+        return jsonify(
+            {
+                "totalCount": total_count,
+                "todayCount": today_count,
+                "weekCount": week_count,
+                "avgTime": round(avg_time, 1),
+                "successRate": success_rate,
+            }
+        )
     except Exception as e:
         logger.warning(f"Stats API error: {e}")
         # Fallback auf Standard-Werte
-        return jsonify({
-            'totalCount': 1247,
-            'todayCount': 23,
-            'weekCount': 247,
-            'avgTime': 3.2,
-            'successRate': 95
-        })
+        return jsonify({"totalCount": 1247, "todayCount": 23, "weekCount": 247, "avgTime": 3.2, "successRate": 95})
 
 
 if __name__ == "__main__":

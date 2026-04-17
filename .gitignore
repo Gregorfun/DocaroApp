@@ -37,6 +37,7 @@ data/ml/ground_truth.jsonl
 
 # Auth (persistent, lokal)
 data/auth/
+data/users/
 
 # Incoming scans (local, large)
 Daten eingang/

@@ -129,8 +129,20 @@ suppliers:
       - "Bestell-Nr"
     doc_type_overrides: {}
 
+  "Herbrand Fichtenhain":
+    doc_number_fields:
+      - "L-Schein"
+      - "L Schein"
+      - "Lieferschein"
+      - "Lieferschein-Nr"
+    secondary_fields:
+      - "Auftrags-Nr"
+      - "Auftragsnummer"
+    doc_type_overrides: {}
+
   Manitowoc:
     doc_number_fields:
+      - "Auslieferung"
       - "Rechnungsnummer"
       - "Rechnung Nr"
       - "Rechnung-Nr"

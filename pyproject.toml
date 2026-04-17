@@ -26,6 +26,7 @@ requires-python = ">=3.9"
 [tool.pytest.ini_options]
 testpaths = ["tests", "core"]
 python_files = "test_*.py"
+pythonpath = ["."]
 addopts = "-v --cov=app --cov=core"
 markers = [
     "benchmark: marks performance benchmark tests (deselect with '-m \"not benchmark\"')",

@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shutil
-import shlex
 import subprocess
 import logging
 import threading
@@ -68,6 +67,7 @@ except ImportError:
     DocumentStatus = None
 
 from config import Config
+from constants import DATE_REGEX_PATTERNS, LABEL_PATTERNS, LABEL_PRIORITY
 from core.metrics import (
     count_job,
     count_step_error,
@@ -75,23 +75,24 @@ from core.metrics import (
     observe_pdf_render,
     observe_pipeline_step,
 )
+from core.text_segments import segment_text
+from utils import first_path_from_env, has_pdfinfo
 
 config = Config()
-from constants import DATE_REGEX_PATTERNS, LABEL_PATTERNS, LABEL_PRIORITY, DATE_LABELS
-from utils import first_path_from_env, has_pdfinfo
-from core.text_segments import segment_text
+
 
 def normalize_text(text: str) -> str:
     """Normalisiert Text für OCR: Entfernt überflüssige Leerzeichen und Zeilenumbrüche."""
     if not text:
         return ""
     # Entferne Zeilenumbrüche und Tabs, ersetze durch Leerzeichen
-    text = re.sub(r'[\n\r\t]+', ' ', text)
+    text = re.sub(r"[\n\r\t]+", " ", text)
     # Entferne Nicht-Alphanumerisch außer Leerzeichen und Umlauten
-    text = re.sub(r'[^\w\säöüÄÖÜß]', '', text)
+    text = re.sub(r"[^\w\säöüÄÖÜß]", "", text)
     # Entferne mehrfache Leerzeichen
-    text = re.sub(r' +', ' ', text)
+    text = re.sub(r" +", " ", text)
     return text.strip()
+
 
 BASE_DIR = config.BASE_DIR
 DEFAULT_DATE_FORMAT = "%Y-%m-%d"
@@ -106,7 +107,9 @@ LOG_RETENTION_DAYS = config.LOG_RETENTION_DAYS
 DEBUG_EXTRACT = config.DEBUG_EXTRACT
 USE_PADDLEOCR = getattr(config, "USE_PADDLEOCR", False)
 PADDLEOCR_LANG = getattr(config, "PADDLEOCR_LANG", "german")
-PADDLEOCR_FALLBACK_THRESHOLD = float(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle für Fallback
+PADDLEOCR_FALLBACK_THRESHOLD = float(
+    os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400")
+)  # Score-Schwelle für Fallback
 PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
 LLM_ASSIST_ENABLED = bool(getattr(config, "LLM_ASSIST_ENABLED", False))
 LLM_ASSIST_MODEL = str(getattr(config, "LLM_ASSIST_MODEL", "llama3.1:8b-instruct"))
@@ -117,6 +120,7 @@ LLM_ASSIST_TIMEOUT_SECONDS = float(getattr(config, "LLM_ASSIST_TIMEOUT_SECONDS",
 # mit stärkerer Vorverarbeitung (Kontrast/Schärfe/Threshold). Default bewusst
 # konservativ – kann per Env var angepasst werden.
 AGGRESSIVE_TESSERACT_RETRY_SCORE = int(os.getenv("DOCARO_OCR_AGGRESSIVE_RETRY_SCORE", "250"))
+
 
 def _render_dpi() -> int:
     """DPI for PDF->image rendering.
@@ -129,6 +133,8 @@ def _render_dpi() -> int:
     except ValueError:
         dpi = 200
     return max(120, min(dpi, 300))
+
+
 DEBUG_LOG_PATH = config.LOG_DIR / "extract_debug.log"
 _LOGGER = logging.getLogger(__name__)
 _LOG_LOCK = threading.Lock()
@@ -254,12 +260,7 @@ def _paddle_ocr_image(image) -> Tuple[str, float, str]:
         #  B) [ [ [box, (text, conf)], ... ] ]  (pages)
         entries: List[object] = []
         try:
-            if (
-                isinstance(result, list)
-                and result
-                and isinstance(result[0], list)
-                and len(result[0]) == 2
-            ):
+            if isinstance(result, list) and result and isinstance(result[0], list) and len(result[0]) == 2:
                 # Form A
                 entries = result  # type: ignore[assignment]
             else:
@@ -589,6 +590,7 @@ def extract_document_numbers(text: str) -> Dict[str, object]:
 
     return {"delivery_note_no": None, "order_no": None, "confidence": "none"}
 
+
 def extract_delivery_note_number(text: str) -> Optional[str]:
     """
     Extracts the delivery note number from the text.
@@ -596,7 +598,6 @@ def extract_delivery_note_number(text: str) -> Optional[str]:
     """
     found = _find_number_near_keywords(text or "", DELIVERY_NOTE_KEYWORDS)
     return found
-
 
 
 CANONICAL_SUPPLIERS = {
@@ -610,7 +611,6 @@ CANONICAL_SUPPLIERS = {
     "informationstechnik gmbh": "WFI Funktechnik GmbH",
     "wfi funktechnik gmbh": "WFI Funktechnik GmbH",
     "wfi funktechnik de": "WFI Funktechnik GmbH",
-    "wfi funktechnik": "WFI Funktechnik GmbH",
     "ortjohann kraft": "Orjohann Kraft",
     "ortjohann und kraft": "Orjohann Kraft",
     "ortjohann + kraft": "Orjohann Kraft",
@@ -624,6 +624,7 @@ def _is_never_supplier(value: str) -> bool:
     if not norm:
         return False
     return any(term in norm for term in RECIPIENT_BLACKLIST)
+
 
 # LABEL_PATTERNS und LABEL_PRIORITY aus constants.py verwendet
 
@@ -776,12 +777,13 @@ def _ocr_image(
                 return text
             raise TimeoutError(str(e))
         raise
-    except (pytesseract.TesseractError, TimeoutError) as e:
+    except (pytesseract.TesseractError, TimeoutError):
         if use_paddle:
             # Fallback zu PaddleOCR wenn explizit gewünscht
             text, _, _ = _paddle_ocr_image(image)
             return text
         raise
+
 
 def _ocr_image_paddle(image, timeout: Optional[int] = None) -> str:
     """OCR mit PaddleOCR (Fallback).
@@ -997,7 +999,11 @@ def _extract_textlayer(pdf_path: Path, pages: int = 1) -> Tuple[List[str], str]:
 def _score_rotation_text(text: str) -> int:
     words = len(text.split())
     label_hits = sum(1 for _, pattern in LABEL_PATTERNS if pattern.search(text))
-    date_hits = len(NUMERIC_DATE_REGEX.findall(text)) + len(ISO_DATE_REGEX.findall(text)) + len(DMY_MONTH_DASH_REGEX.findall(text))
+    date_hits = (
+        len(NUMERIC_DATE_REGEX.findall(text))
+        + len(ISO_DATE_REGEX.findall(text))
+        + len(DMY_MONTH_DASH_REGEX.findall(text))
+    )
     return words + (label_hits * 20) + (date_hits * 50)
 
 
@@ -1166,8 +1172,13 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
                 }
             else:
                 # OSD rotation ist nicht besser; bleib bei 0°
-                _LOGGER.info("osd_rotation rejected: %s (base=%d, osd=%d, need >%.0f)",
-                            osd_rotation, base_score, osd_score, base_score * 1.1)
+                _LOGGER.info(
+                    "osd_rotation rejected: %s (base=%d, osd=%d, need >%.0f)",
+                    osd_rotation,
+                    base_score,
+                    osd_score,
+                    base_score * 1.1,
+                )
         except (pytesseract.TesseractError, TimeoutError) as exc:
             _LOGGER.info("osd_rotation failed: %s -> %s", osd_rotation, exc)
 
@@ -1510,24 +1521,144 @@ def _collect_date_candidates(text: str) -> List[Tuple[datetime, str]]:
     return candidates
 
 
+def _looks_like_dekra_report_text(text: str) -> bool:
+    lower = (text or "").lower()
+    markers = (
+        "dekra",
+        "prüfbericht",
+        "pruefbericht",
+        "untersuchungsbericht",
+        "hauptuntersuchung",
+        "hu-prüfung",
+        "hu-pruefung",
+        "berichts-nr",
+        "berichtsnr",
+    )
+    return any(marker in lower for marker in markers)
+
+
+def _is_excluded_date_context(line: str) -> bool:
+    """Schließt Fahrzeug-/Fristdaten aus, die nicht das Dokumentdatum sind."""
+    lower = (line or "").lower()
+    if re.search(r"\bez\b", lower):
+        return True
+    if any(keyword in lower for keyword in ("erstzulassung", "erstzulassungsdatum", "zulassung")):
+        return True
+    if any(keyword in lower for keyword in ("nächste hu", "naechste hu", "fällig", "faellig")):
+        return True
+    return False
+
+
+def _extract_dekra_report_date_candidate(
+    lines: List[str],
+    source: str,
+    base_confidence: float,
+) -> Optional[Dict[str, object]]:
+    """Findet bei DEKRA-Prüfberichten das Berichtsdatum, meist bei "vom"."""
+    text = "\n".join(lines)
+    if not _looks_like_dekra_report_text(text):
+        return None
+
+    report_markers = (
+        "berichts-nr",
+        "berichtsnr",
+        "untersuchungsbericht",
+        "prüfbericht",
+        "pruefbericht",
+        "hauptuntersuchung",
+        "hu-prüfung",
+        "hu-pruefung",
+    )
+    candidates: List[Dict[str, object]] = []
+    clean_lines = [line.strip() for line in lines]
+
+    for idx, line in enumerate(clean_lines):
+        if not line:
+            continue
+        lower = line.lower()
+        if _is_excluded_date_context(lower):
+            continue
+
+        has_report_marker = any(marker in lower for marker in report_markers)
+        has_vom = re.search(r"\bvom\b", lower) is not None
+        if not (has_report_marker or has_vom):
+            continue
+
+        window = [line]
+        if has_report_marker:
+            window.extend(clean_lines[idx + 1 : idx + 3])
+
+        for offset, candidate_line in enumerate(window):
+            if _is_excluded_date_context(candidate_line):
+                continue
+            for date_obj, date_str in _collect_date_candidates(candidate_line):
+                candidate_lower = candidate_line.lower()
+                score = 100
+                if re.search(r"\bvom\b", candidate_lower):
+                    score += 50
+                if has_report_marker:
+                    score += 40
+                score -= offset * 5
+                evidence = candidate_line.strip()
+                if len(evidence) > 120:
+                    evidence = evidence[:117] + "..."
+                candidates.append(
+                    {
+                        "date": date_obj,
+                        "raw": date_str,
+                        "label": "dekra_report_date",
+                        "priority": 0,
+                        "confidence": min(max(base_confidence, 0.90), 0.99),
+                        "evidence": evidence,
+                        "source": source,
+                        "_score": score,
+                        "_pos": idx + offset,
+                    }
+                )
+
+    if not candidates:
+        return None
+
+    best = sorted(candidates, key=lambda item: (-(item.get("_score", 0) or 0), item.get("_pos", 999)))[0]
+    best.pop("_score", None)
+    best.pop("_pos", None)
+    return best
+
+
 def _extract_candidates_from_lines(
     lines: List[str],
     source: str,
     base_confidence: float,
 ) -> List[Dict[str, object]]:
     candidates: List[Dict[str, object]] = []
+    dekra_candidate = _extract_dekra_report_date_candidate(lines, source, base_confidence)
+    if dekra_candidate:
+        candidates.append(dekra_candidate)
+
     for idx, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line:
             continue
         lower = line.lower()
+        if _is_excluded_date_context(lower):
+            continue
         normalized_line = _normalize_date_text(line)
         label_type = ""
         for label_name, pattern in LABEL_PATTERNS:
             if pattern.search(lower):
                 label_type = label_name
                 break
-        if not label_type and "vom" in lower and ("lieferschein" in lower or "beleg" in lower):
+        if (
+            not label_type
+            and "vom" in lower
+            and (
+                "lieferschein" in lower
+                or "beleg" in lower
+                or "bericht" in lower
+                or "prüfbericht" in lower
+                or "pruefbericht" in lower
+            )
+        ):
             label_type = "vom"
         context_lines = [normalized_line]
         if idx + 1 < len(lines):
@@ -1565,6 +1696,8 @@ def _extract_candidates_from_lines(
             )
     if not candidates:
         for raw_line in lines:
+            if _is_excluded_date_context(raw_line):
+                continue
             normalized_line = _normalize_date_text(raw_line)
             date_candidates = _collect_date_candidates(normalized_line)
             for date_obj, date_str in date_candidates:
@@ -1697,8 +1830,11 @@ def extract_best_date(
 
         # Rotation-Fallback NUR wenn erste Rotation unzureichend
         if not has_date_hints or not has_good_score:
-            _LOGGER.info("date rotation fallback: roi score=%d, date_hits=%d; trying full-page ocr at 0°",
-                        first_score, _count_date_hits(combined_text))
+            _LOGGER.info(
+                "date rotation fallback: roi score=%d, date_hits=%d; trying full-page ocr at 0°",
+                first_score,
+                _count_date_hits(combined_text),
+            )
             # Versuche erst Full-Page OCR bei 0° (kann better sein als ROI)
             try:
                 full_ocr_text = _ocr_image(best_image, best_rotation, timeout=OCR_TIMEOUT_SECONDS)
@@ -1826,6 +1962,7 @@ def extract_best_date(
         "evidence": "",
         "source": "none",
     }
+
 
 def load_suppliers_db() -> Dict[str, List[Dict[str, object]]]:
     SUPPLIERS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2057,8 +2194,6 @@ def detect_supplier_detailed(
     segmented = segment_text(text, header_max_lines=40, recipient_max_lines=20)
     header_text = "\n".join(segmented.header_lines)
     body_text = "\n".join(segmented.body_lines)
-    recipient_text = "\n".join(segmented.recipient_lines)
-
     # Segmentgewichtung: header > body >> recipient
     segment_multiplier = {"header": 1.0, "body": 0.85, "recipient": 0.20, "role": 0.95}
 
@@ -2160,6 +2295,7 @@ def detect_supplier_detailed(
     ksr_detected_in_roles = False
     try:
         if (doc_type_hint or "").strip().upper() == "ÜBERNAHMESCHEIN":
+
             def _extract_role_block_local(marker: str, max_lines: int = 20) -> str:
                 lines = [ln.rstrip() for ln in (text or "").splitlines()]
                 if not lines:
@@ -2187,7 +2323,9 @@ def detect_supplier_detailed(
             ]
             role_joined = "\n".join([t for t in role_texts if t])
             role_norm = _normalize_supplier_text(role_joined)
-            if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE):
+            if re.search(r"\bksr\b", role_norm, flags=re.IGNORECASE) or re.search(
+                r"ks[-\s]?logistic|ks[-\s]?recycling", role_norm, flags=re.IGNORECASE
+            ):
                 ksr_detected_in_roles = True
                 candidates.insert(
                     0,
@@ -2197,7 +2335,7 @@ def detect_supplier_detailed(
                         "source": "role_block_ksr",
                         "matched": "Beförderer/Abfallentsorger(KSR)",
                         "segment": "role",
-                    }
+                    },
                 )
     except Exception:
         pass
@@ -2222,7 +2360,7 @@ def detect_supplier_detailed(
                 "source": "hardfix_liebherr",
                 "matched": "Liebherr(header_detected)",
                 "segment": "header",
-            }
+            },
         )
         has_keyword_hit = True  # Hard-Fix zählt als Keyword-Hit
 
@@ -2241,7 +2379,7 @@ def detect_supplier_detailed(
                 "source": "hardfix_ksr",
                 "matched": "KSR(uebernahmeschein)",
                 "segment": "body",
-            }
+            },
         )
 
     # Heuristik NUR wenn KEIN Keyword/DB-Hit gefunden wurde
@@ -2269,8 +2407,7 @@ def detect_supplier_detailed(
     candidates = [
         c
         for c in candidates
-        if not _is_never_supplier(str(c.get("canonical") or ""))
-        and not _is_never_supplier(str(c.get("matched") or ""))
+        if not _is_never_supplier(str(c.get("canonical") or "")) and not _is_never_supplier(str(c.get("matched") or ""))
     ]
 
     # Deduplicate by canonical+segment+source+matched, keep max confidence
@@ -2359,12 +2496,7 @@ _FILENAME_ALLOWED = re.compile(r"[^a-zA-Z0-9_\-\.äöüÄÖÜß]+")
 
 def sanitize_filename(value: str) -> str:
     cleaned = value.strip()
-    cleaned = (
-        cleaned.replace("\u00df", "ss")
-        .replace("\u00e4", "ae")
-        .replace("\u00f6", "oe")
-        .replace("\u00fc", "ue")
-    )
+    cleaned = cleaned.replace("\u00df", "ss").replace("\u00e4", "ae").replace("\u00f6", "oe").replace("\u00fc", "ue")
     cleaned = re.sub(r"\s+", "_", cleaned)
     cleaned = _FILENAME_ALLOWED.sub("_", cleaned)
     cleaned = re.sub(r"_+", "_", cleaned)
@@ -2570,8 +2702,11 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     # Early-Exit: Wenn Textlayer ausreichende Konfidenz liefert, überspringe OCR komplett
     skip_ocr = (
         (not supplier_is_recipient)
-        and date_obj and date_confidence >= 0.80
-        and supplier and supplier != "Unbekannt" and supplier_confidence >= 0.80
+        and date_obj
+        and date_confidence >= 0.80
+        and supplier
+        and supplier != "Unbekannt"
+        and supplier_confidence >= 0.80
     )
 
     # 3) Falls Textlayer nicht aussagekräftig: OCR als Fallback durchführen
@@ -2579,10 +2714,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
     images: List[object] = []
     ocr_text = ""
     need_supplier_ocr = (
-        supplier_is_recipient
-        or (not supplier)
-        or supplier == "Unbekannt"
-        or float(supplier_confidence or 0.0) < 0.75
+        supplier_is_recipient or (not supplier) or supplier == "Unbekannt" or float(supplier_confidence or 0.0) < 0.75
     )
 
     # OCR ist nötig wenn:
@@ -2710,7 +2842,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                         # Wenn bisher Empfänger-Treffer: jede echte Supplier-Erkennung bevorzugen.
                         min_needed = 0.0 if supplier_is_recipient else float(supplier_confidence or 0.0)
                         if s2 and s2 != "Unbekannt" and c2 >= min_needed:
-                            supplier, supplier_confidence, supplier_source, supplier_guess_line = s2, c2, "paddle", guess2
+                            supplier, supplier_confidence, supplier_source, supplier_guess_line = (
+                                s2,
+                                c2,
+                                "paddle",
+                                guess2,
+                            )
                             supplier_candidates = cands2 or []
 
                     # Datum: nur überschreiben, wenn wir dadurch besser werden
@@ -2731,7 +2868,9 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                             if best_candidate:
                                 date_obj = best_candidate.get("date")
                                 date_source = best_candidate.get("source", "paddle")
-                                date_confidence = max(date_confidence, float(best_candidate.get("confidence", 0.72) or 0.72))
+                                date_confidence = max(
+                                    date_confidence, float(best_candidate.get("confidence", 0.72) or 0.72)
+                                )
                                 date_evidence = best_candidate.get("evidence", "") or ""
                 elif paddle_err and paddle_err not in ("disabled", "unavailable"):
                     _LOGGER.info("PaddleOCR error: %s", paddle_err)
@@ -2747,11 +2886,11 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
 
     # Stelle sicher dass supplier_raw und supplier_canonical gesetzt sind
     # (falls nicht schon durch Canonicalizer gesetzt)
-    if 'supplier_raw' not in locals():
+    if "supplier_raw" not in locals():
         supplier_raw = supplier
-    if 'supplier_canonical' not in locals():
+    if "supplier_canonical" not in locals():
         supplier_canonical = supplier
-    if 'supplier_matched_alias' not in locals():
+    if "supplier_matched_alias" not in locals():
         supplier_matched_alias = ""
 
     result["supplier"] = supplier_canonical  # Nutze canonical name
@@ -2928,17 +3067,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                     "bill to",
                 ]
                 is_customer_context = any(
-                    re.search(rf"\b{re.escape(m)}\b.*\bfranz\b.*\bbracht\b", norm)
-                    for m in customer_markers
+                    re.search(rf"\b{re.escape(m)}\b.*\bfranz\b.*\bbracht\b", norm) for m in customer_markers
                 )
                 if is_customer_context:
                     # Bevorzuge KSR falls vorhanden (typisch bei Entsorgung/Abfall-Belegen)
                     ksr = next(
-                        (
-                            c
-                            for c in supplier_candidates
-                            if str(c.get("canonical") or "").strip().upper() == "KSR"
-                        ),
+                        (c for c in supplier_candidates if str(c.get("canonical") or "").strip().upper() == "KSR"),
                         None,
                     )
                     if ksr:
@@ -2950,10 +3084,13 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                         alts = [
                             c
                             for c in supplier_candidates
-                            if str(c.get("canonical") or "").strip() and str(c.get("canonical") or "").lower() != "franz bracht"
+                            if str(c.get("canonical") or "").strip()
+                            and str(c.get("canonical") or "").lower() != "franz bracht"
                         ]
                         alts.sort(key=lambda x: float(x.get("confidence") or 0.0), reverse=True)
-                        alt = next((c for c in alts if str(c.get("segment") or "") != "recipient"), None) or (alts[0] if alts else None)
+                        alt = next((c for c in alts if str(c.get("segment") or "") != "recipient"), None) or (
+                            alts[0] if alts else None
+                        )
                         if alt:
                             supplier_canonical = str(alt.get("canonical"))
                             supplier_source = str(alt.get("source") or "customer_blocked")
@@ -3046,7 +3183,9 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
         current_supplier_unknown = supplier_canonical in ("", "Unbekannt")
         current_date_missing = not bool(date_obj)
         current_doc_type_weak = (doc_type or "SONSTIGES") == "SONSTIGES" or float(doc_type_confidence or 0.0) < 0.70
-        docnum_conf_score = {"none": 0.0, "low": 0.4, "medium": 0.7, "high": 0.9}.get(str(doc_number_confidence or "").lower(), 0.0)
+        docnum_conf_score = {"none": 0.0, "low": 0.4, "medium": 0.7, "high": 0.9}.get(
+            str(doc_number_confidence or "").lower(), 0.0
+        )
         current_doc_number_weak = (
             not str(doc_number or "").strip()
             or str(doc_number or "").startswith("ohneNr")
@@ -3202,9 +3341,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
                 return 0.0
 
         needs_review = bool(
-            (not date_obj)
-            or (supplier_canonical in ("", "Unbekannt"))
-            or (supplier_source in ("heuristic", "none"))
+            (not date_obj) or (supplier_canonical in ("", "Unbekannt")) or (supplier_source in ("heuristic", "none"))
         )
         review_reason = "" if not needs_review else "missing_or_low_confidence"
 
@@ -3260,9 +3397,11 @@ def process_pdf(pdf_path: Path, output_dir: Path, date_format: str = DEFAULT_DAT
             "date_source_label": result.get("date_source", ""),
             "supplier_candidate": supplier,
             "supplier_normalized": normalize_text(supplier),
-            "needs_review": "1"
-            if (not date_obj or supplier in ("", "Unbekannt") or supplier_source in ("heuristic", "none"))
-            else "0",
+            "needs_review": (
+                "1"
+                if (not date_obj or supplier in ("", "Unbekannt") or supplier_source in ("heuristic", "none"))
+                else "0"
+            ),
             "error": result.get("error", ""),
         }
     )
@@ -3380,11 +3519,7 @@ def process_folder(
         )
         return result
 
-    pdf_files = sorted(
-        p
-        for p in input_dir.iterdir()
-        if p.is_file() and p.suffix.lower() == ".pdf"
-    )
+    pdf_files = sorted(p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf")
     total = len(pdf_files)
     cpu_count = os.cpu_count() or 1
     max_workers_env = int(os.getenv("DOCARO_PROCESS_MAX_WORKERS", "1") or "1")

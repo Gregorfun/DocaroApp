@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -116,7 +115,7 @@ def create_user(db_path: Path, email: str, password: str, role: str = "user") ->
         return existing
 
     password_hash = _ph.hash(password)
-    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     with _connect(db_path) as conn:
         cur = conn.execute(
