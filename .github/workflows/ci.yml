@@ -41,7 +41,11 @@ jobs:
 
     - name: Run tests
       run: |
-        python -m pytest tests/test_stateless_auth.py services/test_auth_store.py tests
+        python -m pytest tests
+
+    - name: Validate config (non-strict)
+      run: |
+        python tools/validate_config.py
 
   benchmark:
     runs-on: ubuntu-latest
@@ -82,12 +86,11 @@ jobs:
 
     env:
       QUALITY_CHECK_PATHS: >-
-        app/app.py
+        app
         config.py
-        services/auth_store.py
-        services/web_auth.py
-        services/test_auth_store.py
-        tests/test_stateless_auth.py
+        services
+        tests
+        tools
 
     permissions:
       contents: read
