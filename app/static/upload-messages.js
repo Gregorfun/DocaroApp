@@ -6,7 +6,7 @@
 const UploadMessages = {
   facts: [
     "OCR reagiert sensibel auf Scanqualitaet und Kontrast.",
-    "Docaro kombiniert Textlayer, OCR, Regeln und Confidence.",
+    "DocaroApp kombiniert Textlayer, OCR, Regeln und Confidence.",
     "Klare Scans verbessern Lieferant und Dokumentnummer deutlich.",
     "Manuelle Korrekturen fliessen direkt in Trainingsdaten ein.",
     "Dokumenttypen steuern automatisch das Routing im Prozess.",
@@ -337,11 +337,40 @@ class ProgressDisplay {
     const avgTime = Number(UploadMessages.currentStats.avgTime || 0).toFixed(1);
     const successRate = Number(UploadMessages.currentStats.successRate || 0);
 
+    // ETA-Berechnung: linearer Fortschritt seit erster Beobachtung.
+    const progress = payload.progress || {};
+    const done = Number(progress.done || 0);
+    const total = Number(progress.total || 0);
+    let etaText = '–';
+    if (total > 0) {
+      const now = Date.now();
+      if (this._etaAnchorTime === undefined || done < (this._etaAnchorDone || 0)) {
+        this._etaAnchorTime = now;
+        this._etaAnchorDone = done;
+      }
+      const dDone = Math.max(0, done - (this._etaAnchorDone || 0));
+      const dTime = Math.max(1, now - this._etaAnchorTime);
+      if (dDone > 0 && done < total) {
+        const perItem = dTime / dDone;
+        const remainingMs = (total - done) * perItem;
+        if (remainingMs >= 60000) {
+          etaText = `~${Math.round(remainingMs / 60000)} min`;
+        } else if (remainingMs >= 1000) {
+          etaText = `~${Math.round(remainingMs / 1000)} s`;
+        } else {
+          etaText = '< 1 s';
+        }
+      } else if (done >= total && total > 0) {
+        etaText = 'fertig';
+      }
+    }
+
     this.liveStatsEl.innerHTML = `
       <strong>Live-Stats</strong>
       <div>Queue: <span>${queueDepth}</span></div>
       <div>Ergebnisse: <span>${totalResults}</span></div>
       <div>Ø Dauer: <span>${avgTime}s</span></div>
+      <div>Restzeit: <span>${etaText}</span></div>
       <div>Erfolg: <span>${successRate}%</span></div>
     `;
   }

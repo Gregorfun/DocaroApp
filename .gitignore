@@ -4,6 +4,12 @@ __pycache__/
 .venv/
 env/
 venv/
+build/
+dist/
+runtime-test/
+_build_w13.log
+_pytest_w13.log
+build_repro.log
 
 # Flask / runtime
 instance/
@@ -14,7 +20,7 @@ instance/
 Thumbs.db
 .vscode/
 
-# Docaro runtime data
+# DocaroApp runtime data
 data/tmp/
 data/eingang/
 data/fertig/

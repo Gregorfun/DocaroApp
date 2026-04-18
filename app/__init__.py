@@ -1,0 +1,1 @@
+"""Docaro web application package."""

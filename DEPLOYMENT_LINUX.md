@@ -95,10 +95,14 @@ Wichtigste Variablen:
 
 - `REDIS_URL` (default: `redis://localhost:6379`)
 - `DOCARO_DEBUG=0|1`
+- `DOCARO_AUTH_REQUIRED=1`
+- `DOCARO_ALLOW_SELF_REGISTER=0`
+- `DOCARO_SESSION_COOKIE_SECURE=1`
 - optional: `DOCARO_RENDER_DPI`, `DOCARO_FOLDER_TIMEOUT`
 - optional Observability: `DOCARO_METRICS_ENABLED=1`, `DOCARO_WORKER_METRICS_PORT=9108`
+- empfohlen fuer Metrics-Schutz: `DOCARO_METRICS_TOKEN=<secret>`
 - optional Sentry: `DOCARO_SENTRY_DSN`, `DOCARO_SENTRY_ENVIRONMENT`, `DOCARO_RELEASE`
-- optional RQ Dashboard: `DOCARO_RQ_DASHBOARD_ENABLED=1`, `DOCARO_RQ_DASHBOARD_URL_PREFIX=/rq`
+- optional RQ Dashboard: `DOCARO_RQ_DASHBOARD_ENABLED=0|1`, `DOCARO_RQ_DASHBOARD_URL_PREFIX=/rq`
 - optional Logging-Format: `DOCARO_LOG_FORMAT=json`
 - optional Queue/OCR-Worker-Limits: `DOCARO_QUEUE_MAX_DEPTH`, `DOCARO_PROCESS_MAX_WORKERS`, `DOCARO_PROCESS_ADAPTIVE_WORKERS`
 - optional Model-Gates: `DOCARO_MODEL_MIN_ACCURACY`, `DOCARO_MODEL_MIN_F1_WEIGHTED`
@@ -197,4 +201,6 @@ docker compose -f docker/docker-compose.yml up -d prometheus grafana redis-expor
 Zugriff:
 
 - Prometheus: `http://<server>:9090`
-- Grafana: `http://<server>:3000` (Default: `admin/admin`)
+- Grafana: `http://<server>:3000` (Admin-Passwort ueber `DOCARO_GRAFANA_ADMIN_PASSWORD` setzen)
+
+Hinweis: Die Compose-Datei bindet Prometheus, Grafana und Redis Exporter standardmaessig nur an `127.0.0.1`, damit diese Oberflaechen nicht ungeschuetzt oeffentlich erreichbar sind.

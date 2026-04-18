@@ -9,9 +9,19 @@ Group=docaro
 WorkingDirectory=/opt/docaro
 EnvironmentFile=/etc/docaro/docaro.env
 Environment=PYTHONUNBUFFERED=1
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/opt/docaro/data
 ExecStart=/opt/docaro/.venv/bin/python /opt/docaro/services/worker.py
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

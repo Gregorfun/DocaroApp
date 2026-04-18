@@ -1,6 +1,6 @@
-# Docaro - Dokumenten-OCR & Extraktion
+# DocaroApp - Dokumenten-OCR & Extraktion
 
-Docaro ist eine Flask-Web-App (Gunicorn) mit RQ-Worker (Redis), die PDF-Dokumente verarbeitet: Text-Layer nutzen, OCR-Fallback (Tesseract), Extraktion (Lieferant/Datum/Dokumenttyp/Dokumentnummer) und Review/Quarantäne.
+DocaroApp ist eine Flask-Web-App (Gunicorn) mit RQ-Worker (Redis), die PDF-Dokumente verarbeitet: Text-Layer nutzen, OCR-Fallback (Tesseract), Extraktion (Lieferant/Datum/Dokumenttyp/Dokumentnummer) und Review/Quarantaene.
 
 ## 🐧 Linux/VPS Deployment
 
@@ -15,7 +15,7 @@ Wenn das ursprüngliche Git-Remote nicht mehr existiert:
 
 ## 📈 Observability (Prometheus + Grafana)
 
-Docaro exportiert Laufzeitmetriken aus dem Worker (Port `9108`, konfigurierbar via `DOCARO_WORKER_METRICS_PORT`) und aus dem Web-Service (`/metrics` auf Port `5001`):
+DocaroApp exportiert Laufzeitmetriken aus dem Worker (Port `9108`, konfigurierbar via `DOCARO_WORKER_METRICS_PORT`) und aus dem Web-Service (`/metrics` auf Port `5001`):
 
 - `docaro_ocr_duration_seconds`
 - `docaro_pdf_render_duration_seconds`
@@ -32,10 +32,16 @@ docker compose -f docker/docker-compose.yml up -d prometheus grafana redis-expor
 Danach:
 
 - Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (`admin` / `admin`)
+- Grafana: `http://localhost:3000` (User via `DOCARO_GRAFANA_ADMIN_USER`, Passwort via `DOCARO_GRAFANA_ADMIN_PASSWORD`)
 
-Das Basis-Dashboard wird automatisch provisioniert (`Docaro Observability`), inklusive P95/P99-Latenzen und Queue-/Error-Sicht.
+Das Basis-Dashboard wird automatisch provisioniert (`DocaroApp Observability`), inklusive P95/P99-Latenzen und Queue-/Error-Sicht.
 Zusätzlich sind Alert-Rules für Worker/Web-Down, Error-Rate, Queue-Backlog sowie OCR-P95/P99 enthalten.
+
+Technischer Produktions-Check vor Go-Live:
+
+```bash
+python tools/production_readiness_check.py --env-file /etc/docaro/docaro.env
+```
 
 ## ⚡ Runtime Performance
 
@@ -204,7 +210,7 @@ Docaro ist nur für registrierte Benutzer nutzbar. Eine Registrierung über das 
 
 ### Seed-User
 
-- `DOCARO_SEED_EMAIL` (Default): `g.machuletz@bracht-autokrane.de`
+- `DOCARO_SEED_EMAIL` (Default): `admin@docaro.local`
 - `DOCARO_SEED_PASSWORD`: muss in deiner Shell gesetzt werden (wird **nicht** gespeichert/committed)
 
 PowerShell (nur für aktuelle Session):
@@ -217,7 +223,7 @@ $env:DOCARO_SEED_PASSWORD = "<DEIN_PASSWORT>"
 Alternativ per Script (Passwort via ENV oder interaktiv):
 
 ```powershell
-D:/Docaro/.venv/Scripts/python.exe -m scripts.seed_user --email g.machuletz@bracht-autokrane.de
+D:/Docaro/.venv/Scripts/python.exe tools/seed_user.py --email admin@docaro.local --role admin
 ```
 
 ---
@@ -540,6 +546,8 @@ Pull Requests willkommen! Siehe [CONTRIBUTING.md](CONTRIBUTING.md)
 ## 📝 Lizenz
 
 Siehe [LICENSE](LICENSE)
+
+Fuer produktive Nutzung siehe zusaetzlich [EULA.md](EULA.md), [PRIVACY.md](PRIVACY.md), [DPA_TEMPLATE.md](DPA_TEMPLATE.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) und [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).
 
 ---
 

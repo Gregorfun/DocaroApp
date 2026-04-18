@@ -93,6 +93,7 @@ from services.auto_sort import (
 )
 from core.runtime_state import RuntimeStateConfig, reset_runtime_state, reset_runtime_state_once
 from core.runtime_store import RuntimeStore
+from core import user_prefs as _user_prefs
 from app.runtime_storage import RuntimeStorageManager
 from app.queue_runtime import QueueRuntimeManager
 from services.web_auth import install_auth
@@ -470,13 +471,11 @@ def _auth_user_totals() -> dict:
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT COUNT(*) AS total,
                    SUM(CASE WHEN lower(role) = 'admin' THEN 1 ELSE 0 END) AS admin
             FROM users
-            """
-        ).fetchone()
+            """).fetchone()
         conn.close()
         if row:
             totals["total"] = int(row["total"] or 0)
@@ -506,11 +505,7 @@ def _collect_special_admin_overview() -> dict:
         "quarantine_pdf_count": sum(int(s.get("quarantine_pdf_count") or 0) for s in scopes),
         "inbox_pdf_count": sum(int(s.get("inbox_pdf_count") or 0) for s in scopes),
     }
-    queue_depth = 0
-    try:
-        queue_depth = int(q.count)
-    except Exception:
-        queue_depth = 0
+    queue_depth, _ = _queue_depth_safe()
 
     runtime_health = {"ok": False, "quick_check": "unknown", "journal_mode": "unknown"}
     try:
@@ -648,6 +643,10 @@ init_sentry("web")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 app.config["DEBUG"] = DEBUG_MODE
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("DOCARO_SESSION_COOKIE_SECURE", "1") == "1"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=int(os.getenv("DOCARO_SESSION_IDLE_MINUTES", "480")))
 
 # Registriere Review-Blueprint
 try:
@@ -664,14 +663,32 @@ try:
 except ImportError as e:
     logger.warning(f"Review-Routes nicht geladen: {e}")
 
-# Auth installieren (Login-Pflicht). Registrierung ist deaktiviert; User nur via Seed/Admin.
-seed_email = getattr(config, "SEED_EMAIL_DEFAULT", "g.machuletz@bracht-autokrane.de")
+# Registriere PDF-Toolkit-Blueprint
+try:
+    from pdf_toolkit_routes import pdf_toolkit_bp
+
+    app.register_blueprint(pdf_toolkit_bp)
+    logger.info("PDF-Toolkit-Routes erfolgreich registriert")
+except ImportError as e:
+    logger.warning(f"PDF-Toolkit-Routes nicht geladen: {e}")
+
+# Registriere Desktop-Komfort-Blueprint (Reveal/Toast/Recent/Diagnose)
+try:
+    from desktop_routes import desktop_bp
+
+    app.register_blueprint(desktop_bp)
+    logger.info("Desktop-Komfort-Routes registriert")
+except ImportError as e:
+    logger.warning(f"Desktop-Komfort-Routes nicht geladen: {e}")
+
+# Auth installieren (Login-Pflicht). Registrierung ist standardmäßig deaktiviert; User nur via Seed/Admin.
+seed_email = getattr(config, "SEED_EMAIL_DEFAULT", "admin@docaro.local")
 seed_password = os.getenv("DOCARO_SEED_PASSWORD")
 install_auth(app, config.AUTH_DB_PATH, seed_email=seed_email, seed_password=seed_password)
 
 
 def _install_rq_dashboard() -> None:
-    if os.getenv("DOCARO_RQ_DASHBOARD_ENABLED", "1") != "1":
+    if os.getenv("DOCARO_RQ_DASHBOARD_ENABLED", "0") != "1":
         return
     try:
         import rq_dashboard  # type: ignore
@@ -697,6 +714,25 @@ _install_rq_dashboard()
 
 def _log_exception(context: str, exc: Exception) -> None:
     logger.exception(f"Exception in {context}: {exc}")
+
+
+def _queue_depth_safe() -> tuple[int, str]:
+    try:
+        return int(q.count), ""
+    except Exception as exc:
+        count_step_error("queue_depth", exc)
+        return 0, str(exc)
+
+
+def _enqueue_job_safe(fn, *job_args, owner_scope: str = "", **job_kwargs):
+    try:
+        job = q.enqueue(fn, *job_args, **job_kwargs)
+        _tag_job_owner(job, owner_scope)
+        return job, ""
+    except Exception as exc:
+        count_step_error("queue_enqueue", exc)
+        _log_exception("queue:enqueue", exc)
+        return None, str(exc)
 
 
 def _parse_limit_config(raw: str, default_limit: int, default_window: int) -> tuple[int, int]:
@@ -1053,6 +1089,8 @@ def index():
     settings = _get_auto_sort_settings()
     inbox_dir_value = getattr(settings, "inbox_dir", INBOX_DIR)
     inbox_dir_display = _display_inbox_dir(inbox_dir_value)
+    user_prefs_data = _load_user_prefs_safe()
+    quarantine_count = sum(1 for r in (results or []) if r.get("quarantined") == "1")
     return render_template(
         "index.html",
         results=filtered,
@@ -1064,7 +1102,88 @@ def index():
         progress=progress,
         inbox_dir_display=inbox_dir_display,
         is_special_admin=_is_special_admin_session(),
+        user_prefs=user_prefs_data,
+        quarantine_count=quarantine_count,
     )
+
+
+@app.get("/quarantine")
+def quarantine_page():
+    """Listet alle Dokumente in Quarantaene mit Aktion 'Trotzdem freigeben'."""
+    results = _load_last_results() or []
+    results = _attach_file_ids(results)
+    items = [r for r in results if r.get("quarantined") == "1"]
+    return render_template(
+        "quarantine.html",
+        entries=items,
+        is_special_admin=_is_special_admin_session(),
+    )
+
+
+@app.post("/quarantine/release")
+def quarantine_release():
+    """Verschiebt ein Quarantaene-Dokument zurueck nach `fertig/` und entfernt das Quarantaene-Flag."""
+    file_id = (request.form.get("file_id") or "").strip()
+    if not file_id:
+        message = "file_id fehlt."
+        if _is_ajax_request():
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message)
+        return redirect(url_for("quarantine_page"))
+
+    result = _result_for_file_id(file_id)
+    if not result or result.get("quarantined") != "1":
+        message = "Dokument nicht in Quarantaene oder unbekannt."
+        if _is_ajax_request():
+            return jsonify({"ok": False, "message": message}), 404
+        flash(message)
+        return redirect(url_for("quarantine_page"))
+
+    user_scope = _current_user_scope()
+    out_dir = _user_out_dir(user_scope)
+    pdf_path = _resolve_file_path(file_id, user_scope=user_scope)
+    moved_to: Optional[Path] = None
+    move_error: Optional[str] = None
+    if pdf_path and pdf_path.exists():
+        try:
+            target = get_unique_path(out_dir, pdf_path.name)
+            pdf_path.replace(target)
+            moved_to = target
+            _set_session_file_entry(file_id, target, target.name)
+        except OSError as exc:
+            move_error = str(exc)
+
+    # Flag im last_results.json zuruecksetzen, damit Index/Stats konsistent bleiben.
+    results = _load_last_results() or []
+    for item in results:
+        if item.get("file_id") == file_id:
+            item["quarantined"] = ""
+            item["quarantine_reason"] = ""
+            item["manual_reviewed"] = "1"
+            if moved_to:
+                item["out_name"] = moved_to.name
+            break
+    _save_last_results(results)
+
+    _append_history(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "file_id": file_id,
+            "action_type": "quarantine_release",
+            "moved_to": str(moved_to) if moved_to else "",
+            "move_error": move_error or "",
+        }
+    )
+
+    if move_error:
+        message = f"Freigegeben mit Hinweis: {move_error}"
+    else:
+        message = "Dokument freigegeben."
+
+    if _is_ajax_request():
+        return jsonify({"ok": True, "message": message, "moved_to": str(moved_to) if moved_to else ""})
+    flash(message)
+    return redirect(url_for("quarantine_page"))
 
 
 @app.get("/settings")
@@ -1285,6 +1404,14 @@ def status_stream():
 @app.get("/metrics")
 def metrics_endpoint():
     from core.metrics import metrics_payload
+
+    metrics_token = (os.getenv("DOCARO_METRICS_TOKEN") or "").strip()
+    if metrics_token:
+        authorization = request.headers.get("Authorization", "")
+        bearer_token = authorization.removeprefix("Bearer ").strip() if authorization else ""
+        provided_token = request.headers.get("X-Docaro-Metrics-Token") or request.args.get("token") or bearer_token
+        if not provided_token or not hmac.compare_digest(provided_token, metrics_token):
+            return jsonify({"ok": False, "error": "metrics_auth_required"}), 401
 
     payload, content_type = metrics_payload()
     return Response(payload, mimetype=content_type)
@@ -1507,6 +1634,9 @@ def upload():
         include_known = request.form.get("include_known") in ("1", "on", "true")
         user_scope = _current_user_scope()
 
+        # Smart-Defaults: gewähltes Datumsformat als Default merken (best-effort).
+        _record_user_pref(date_fmt=date_fmt)
+
         upload_dir = _user_tmp_dir(user_scope) / f"upload_{uuid4().hex}"
         upload_dir.mkdir(parents=True, exist_ok=True)
         saved_count = 0
@@ -1579,9 +1709,10 @@ def upload():
         # Check if a previous processing is stuck
         _check_processing_timeout()
 
-        if int(q.count) >= QUEUE_MAX_DEPTH:
+        queue_depth, queue_depth_error = _queue_depth_safe()
+        if not queue_depth_error and queue_depth >= QUEUE_MAX_DEPTH:
             flash(
-                f"Queue ist ausgelastet ({int(q.count)} Jobs >= Limit {QUEUE_MAX_DEPTH}). "
+                f"Queue ist ausgelastet ({queue_depth} Jobs >= Limit {QUEUE_MAX_DEPTH}). "
                 "Bitte in wenigen Minuten erneut versuchen."
             )
             return redirect(url_for("index"))
@@ -1590,18 +1721,31 @@ def upload():
 
         # Hintergrundverarbeitung starten und sofort zur Index-Seite redirecten
         _set_processing(True, user_scope=user_scope)
-        job = q.enqueue(
+        job, enqueue_error = _enqueue_job_safe(
             background_process_upload,
-            args=(upload_dir, date_fmt, user_scope),
+            upload_dir,
+            date_fmt,
+            user_scope,
+            owner_scope=user_scope,
             job_timeout="30m",
             result_ttl=86400,
         )
-        _tag_job_owner(job, user_scope)
-        session["active_job_id"] = str(job.id)
-        _set_progress(total=saved_count, done=0, current_file="", job_id=str(job.id), user_scope=user_scope)
-        canary_pct = int(os.getenv("DOCARO_UPLOAD_CANARY_PERCENT", "0"))
-        if _in_canary(canary_pct, "upload-queue"):
-            logger.info("Upload routed through canary cohort (job_id=%s, percent=%s)", job.id, canary_pct)
+        if job is not None:
+            session["active_job_id"] = str(job.id)
+            _set_progress(total=saved_count, done=0, current_file="", job_id=str(job.id), user_scope=user_scope)
+            canary_pct = int(os.getenv("DOCARO_UPLOAD_CANARY_PERCENT", "0"))
+            if _in_canary(canary_pct, "upload-queue"):
+                logger.info("Upload routed through canary cohort (job_id=%s, percent=%s)", job.id, canary_pct)
+            return redirect(url_for("index"))
+
+        logger.warning("Upload fallback to inline processing because queue is unavailable: %s", enqueue_error)
+        flash(
+            "Redis/RQ ist aktuell nicht erreichbar. Die PDF-Verarbeitung laeuft deshalb direkt im Web-Prozess und kann laenger dauern.",
+            "warning",
+        )
+        session.pop("active_job_id", None)
+        background_process_upload(upload_dir, date_fmt, user_scope=user_scope)
+        flash("PDF-Verarbeitung abgeschlossen.")
         return redirect(url_for("index"))
     except Exception as exc:
         _log_exception("upload:handler", exc)
@@ -1631,6 +1775,31 @@ def _clear_pdfs(dir_path: Path) -> None:
             continue
         try:
             pdf.unlink()
+        except OSError:
+            continue
+
+
+def _clear_pdf_tree(dir_path: Path) -> None:
+    if not dir_path.exists():
+        return
+    try:
+        pdf_paths = [path for path in dir_path.rglob("*.pdf") if path.is_file()]
+    except OSError:
+        return
+
+    for pdf in pdf_paths:
+        try:
+            pdf.unlink()
+        except OSError:
+            continue
+
+    try:
+        nested_dirs = sorted((path for path in dir_path.rglob("*") if path.is_dir()), key=lambda item: len(item.parts), reverse=True)
+    except OSError:
+        return
+    for nested in nested_dirs:
+        try:
+            nested.rmdir()
         except OSError:
             continue
 
@@ -1728,6 +1897,47 @@ def _user_autosort_dir(user_scope: str = "") -> Path:
     path = _user_data_root(user_scope) / "autosort"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _record_user_pref(*, supplier: str = "", doctype: str = "", date_fmt: str = "") -> None:
+    """Best-effort: trackt User-Defaults für Smart Suggestions im Index."""
+    try:
+        scope = _current_user_scope()
+        if supplier:
+            _user_prefs.record_supplier_use(DATA_DIR, scope, supplier, doctype=doctype)
+        elif doctype:
+            _user_prefs.record_doctype_use(DATA_DIR, scope, doctype)
+        if date_fmt:
+            _user_prefs.update_prefs(DATA_DIR, scope, last_date_fmt=date_fmt)
+    except Exception as exc:
+        logger.debug("user_prefs hook ignoriert: %s", exc)
+
+
+def _load_user_prefs_safe() -> dict:
+    try:
+        return _user_prefs.load_prefs(DATA_DIR, _current_user_scope())
+    except Exception:
+        return {
+            "last_date_fmt": "%d-%m-%Y",
+            "last_doctype": "",
+            "recent_suppliers": [],
+            "doctype_per_supplier": {},
+        }
+
+
+# Welle 13A: Naming-Template-Provider registrieren, damit build_new_filename()
+# automatisch das Template des aktiven User-Scopes verwendet.
+try:
+    from core import naming_templates as _naming_templates
+    def _active_filename_template_provider() -> str:
+        try:
+            prefs = _user_prefs.load_prefs(DATA_DIR, _current_user_scope())
+            return str(prefs.get("filename_template") or "")
+        except Exception:
+            return ""
+    _naming_templates.set_active_template_provider(_active_filename_template_provider)
+except Exception:
+    pass
 
 
 def _effective_auto_sort_settings(user_scope: str = "") -> AutoSortSettings:
@@ -1875,10 +2085,11 @@ def _refresh_runtime_metrics() -> None:
     global _last_runtime_store_health_check
     global _last_runtime_store_checkpoint
 
+    queue_depth, _ = _queue_depth_safe()
     try:
-        set_queue_depth("default", int(q.count))
+        set_queue_depth("default", queue_depth)
     except Exception as exc:
-        count_step_error("queue_depth", exc)
+        count_step_error("queue_depth_metric", exc)
     try:
         inflight = 1 if list((DATA_DIR / "users").glob("*/tmp/processing.flag")) else 0
         set_inflight("web_processing", inflight)
@@ -1931,18 +2142,32 @@ def process_inbox():
         if not decision.proceed:
             flash(decision.flash_message)
             return redirect(url_for("index"))
-        job = q.enqueue(
+        job, enqueue_error = _enqueue_job_safe(
             background_process_folder,
-            args=(decision.inbox_dir, decision.date_fmt),
-            kwargs={
-                "cleanup_input_dir": False,
-                "log_context": "inbox:bg_worker",
-                "user_scope": user_scope,
-            },
+            decision.inbox_dir,
+            decision.date_fmt,
+            cleanup_input_dir=False,
+            log_context="inbox:bg_worker",
+            user_scope=user_scope,
+            owner_scope=user_scope,
             job_timeout="1h",
             result_ttl=86400,
         )
-        _tag_job_owner(job, user_scope)
+        if job is None:
+            logger.warning("Inbox fallback to inline processing because queue is unavailable: %s", enqueue_error)
+            flash(
+                "Redis/RQ ist aktuell nicht erreichbar. Die Inbox wird deshalb direkt im Web-Prozess verarbeitet.",
+                "warning",
+            )
+            background_process_folder(
+                decision.inbox_dir,
+                decision.date_fmt,
+                cleanup_input_dir=False,
+                log_context="inbox:inline_fallback",
+                user_scope=user_scope,
+            )
+            flash("Inbox-Verarbeitung abgeschlossen.")
+            return redirect(url_for("index"))
         _refresh_runtime_metrics()
         return redirect(url_for("index"))
     except Exception as exc:
@@ -2324,19 +2549,23 @@ def _session_filenames() -> set[str]:
 
 @app.post("/reset")
 def reset_downloads():
+    user_scope = _current_user_scope()
     session_files = _get_session_file_map()
     for entry in session_files.values():
         path_str = entry.get("path") or ""
         if not path_str:
             continue
         path = Path(path_str)
-        if _is_allowed_pdf_path(path) and path.exists():
+        if _is_allowed_pdf_path(path, user_scope=user_scope) and path.exists():
             try:
                 path.unlink()
             except OSError:
                 continue
+
+    for root in (_user_out_dir(user_scope), _user_quarantine_dir(user_scope), _user_autosort_dir(user_scope)):
+        _clear_pdf_tree(root)
+
     _remove_session_files()
-    user_scope = _current_user_scope()
     results_path = _session_results_path(user_scope=user_scope)
     if results_path.exists():
         try:
@@ -2348,6 +2577,12 @@ def reset_downloads():
     if proc_flag.exists():
         try:
             proc_flag.unlink()
+        except OSError:
+            pass
+    progress_path = _progress_path(user_scope=user_scope)
+    if progress_path.exists():
+        try:
+            progress_path.unlink()
         except OSError:
             pass
     return redirect(url_for("index", reset="1"))
@@ -2476,6 +2711,8 @@ def confirm_supplier():
             _append_ground_truth_sample(file_id, source="confirm_supplier")
         except Exception as exc:
             count_step_error("ground_truth_append", exc)
+        # Smart-Defaults: gewählten Lieferanten als Quick-Pick lernen
+        _record_user_pref(supplier=supplier_name, doctype=str((result or {}).get("doc_type") or ""))
         corrections = _load_supplier_corrections()
         corrections[file_id] = supplier_name
         _save_supplier_corrections(corrections)
@@ -3142,7 +3379,7 @@ def _build_view_context(
             if item.get("file_id") == file_id:
                 review_index = idx
                 break
-    title = f"Docaro | {supplier} | {filename}"
+    title = f"DocaroApp | {supplier} | {filename}"
     return {
         "title": title,
         "filename": filename,
@@ -3332,6 +3569,8 @@ def confirm_date():
         _append_ground_truth_sample(file_id, source="confirm_date")
     except Exception as exc:
         count_step_error("ground_truth_append", exc)
+    # Smart-Defaults: gewähltes Datumsformat als Default merken
+    _record_user_pref(date_fmt=date_fmt)
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -3449,6 +3688,11 @@ def confirm_doc_type():
         _append_ground_truth_sample(file_id, source="confirm_doc_type")
     except Exception as exc:
         count_step_error("ground_truth_append", exc)
+    # Smart-Defaults: Doctype + (falls bekannt) Lieferantenbindung lernen
+    _record_user_pref(
+        supplier=str((result or {}).get("supplier") or ""),
+        doctype=raw_val,
+    )
     _append_history(
         {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -3526,7 +3770,24 @@ def delete_pdf():
         flash("Löschen nicht erlaubt.")
         return redirect(url_for("index"))
 
-    _safe_unlink(pdf_path)
+    # Welle 13C: Soft-Delete via Trash-Bin (7-Tage-Wiederherstellung).
+    try:
+        from core import trash_bin as _trash_bin  # lokaler Import, vermeidet Zyklen
+        _trash_bin.move_to_trash(
+            DATA_DIR,
+            _current_user_scope(),
+            pdf_path,
+            metadata={
+                "file_id": file_id,
+                "supplier": result.get("supplier") or "",
+                "out_name": filename,
+                "doc_type": result.get("doc_type") or "",
+                "iso_date": result.get("iso_date") or "",
+            },
+        )
+    except Exception:
+        # Fallback: harter Loesch, damit Datei trotzdem weg ist
+        _safe_unlink(pdf_path)
 
     # Ergebnis entfernen
     results = _load_last_results() or []
@@ -3553,6 +3814,212 @@ def delete_pdf():
 
     flash("PDF gelöscht.")
     return redirect(url_for("index"))
+
+
+@app.post("/bulk_action")
+def bulk_action():
+    """Wendet eine Aktion auf eine Liste von file_ids an.
+
+    Erwartet JSON-Body: {"action": "delete"|"set_status"|"set_doc_type", "file_ids": [...], "value": optional}
+    Gibt JSON zurueck mit summary {processed, skipped, errors}.
+    Best-effort: ein einzelner Fehler bricht nicht die ganze Operation ab.
+    """
+    payload = request.get_json(silent=True) or {}
+    action = (payload.get("action") or "").strip()
+    file_ids = payload.get("file_ids") or []
+    value = (payload.get("value") or "").strip() if payload.get("value") is not None else ""
+
+    allowed_actions = {"delete", "set_status", "set_doc_type"}
+    if action not in allowed_actions:
+        return jsonify({"ok": False, "message": f"Aktion '{action}' nicht erlaubt."}), 400
+    if not isinstance(file_ids, list) or not file_ids:
+        return jsonify({"ok": False, "message": "file_ids fehlt oder leer."}), 400
+    file_ids = [str(fid).strip() for fid in file_ids if str(fid).strip()]
+    if not file_ids:
+        return jsonify({"ok": False, "message": "file_ids enthaelt nur leere Werte."}), 400
+
+    # Wertvalidierung pro Aktion
+    if action == "set_status":
+        if value not in {"unvollstaendig", "in_bearbeitung", "fertig"}:
+            return jsonify({"ok": False, "message": "Status ungueltig."}), 400
+    if action == "set_doc_type":
+        if value not in {"RECHNUNG", "LIEFERSCHEIN", "ÜBERNAHMESCHEIN", "KOMMISSIONIERLISTE", "PRÜFBERICHT", "SONSTIGES"}:
+            return jsonify({"ok": False, "message": "Dokumenttyp ungueltig."}), 400
+
+    results = _load_last_results() or []
+    by_id = {item.get("file_id"): item for item in results if item.get("file_id")}
+
+    processed: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict] = []
+
+    if action == "delete":
+        allowed_roots = [_user_out_dir(), _user_quarantine_dir(), _user_autosort_dir()]
+        ids_to_remove: set[str] = set()
+        for fid in file_ids:
+            item = by_id.get(fid)
+            if not item:
+                skipped.append(fid)
+                continue
+            filename = (item.get("out_name") or "").strip()
+            try:
+                pdf_path = _resolve_file_path(fid) or resolve_pdf_path(filename)
+                if pdf_path and pdf_path.suffix.lower() == ".pdf" and any(
+                    _is_path_within(pdf_path, root) for root in allowed_roots if root
+                ):
+                    _safe_unlink(pdf_path)
+            except Exception as exc:
+                errors.append({"file_id": fid, "error": str(exc)})
+                continue
+            ids_to_remove.add(fid)
+            processed.append(fid)
+
+        if ids_to_remove:
+            new_results = [r for r in results if r.get("file_id") not in ids_to_remove]
+            _save_last_results(new_results)
+            try:
+                corrections = _load_supplier_corrections()
+                changed = False
+                for fid in ids_to_remove:
+                    if fid in corrections:
+                        corrections.pop(fid, None)
+                        changed = True
+                if changed:
+                    _save_supplier_corrections(corrections)
+            except Exception:
+                pass
+
+    elif action == "set_status":
+        needs_review = value == "in_bearbeitung"
+        for fid in file_ids:
+            item = by_id.get(fid)
+            if not item:
+                skipped.append(fid)
+                continue
+            item["needs_review"] = "1" if needs_review else ""
+            processed.append(fid)
+        if processed:
+            _save_last_results(results)
+
+    elif action == "set_doc_type":
+        for fid in file_ids:
+            item = by_id.get(fid)
+            if not item:
+                skipped.append(fid)
+                continue
+            item["doc_type"] = value
+            item["doc_type_confidence"] = "1.00"
+            item["doc_type_source"] = "bulk_user"
+            processed.append(fid)
+            try:
+                _record_user_pref(supplier=item.get("supplier") or "", doctype=value)
+            except Exception:
+                pass
+        if processed:
+            _save_last_results(results)
+
+    return jsonify({
+        "ok": True,
+        "action": action,
+        "processed": processed,
+        "skipped": skipped,
+        "errors": errors,
+        "message": f"{len(processed)} verarbeitet, {len(skipped)} uebersprungen, {len(errors)} Fehler.",
+    })
+
+
+@app.get("/api/results.csv")
+def api_results_csv():
+    """Exportiert die aktuelle Ergebnisliste als CSV (UTF-8 mit BOM, Semikolon-getrennt fuer Excel-DE)."""
+    import csv as _csv
+    from io import StringIO
+
+    results = _load_last_results() or []
+    file_ids_param = (request.args.get("file_ids") or "").strip()
+    if file_ids_param:
+        wanted = {fid for fid in file_ids_param.split(",") if fid.strip()}
+        results = [r for r in results if r.get("file_id") in wanted]
+
+    columns = [
+        ("file_id", "FileID"),
+        ("out_name", "Datei"),
+        ("supplier", "Lieferant"),
+        ("supplier_confidence", "Lieferant_Confidence"),
+        ("date", "Datum"),
+        ("date_confidence", "Datum_Confidence"),
+        ("doc_number", "Dokumentnummer"),
+        ("doc_type", "Dokumenttyp"),
+        ("doc_type_confidence", "Dokumenttyp_Confidence"),
+        ("needs_review", "InBearbeitung"),
+        ("quarantined", "Quarantaene"),
+        ("export_path", "Ablagepfad"),
+    ]
+
+    buf = StringIO()
+    buf.write("\ufeff")
+    writer = _csv.writer(buf, delimiter=";", quoting=_csv.QUOTE_MINIMAL, lineterminator="\r\n")
+    writer.writerow([head for _, head in columns])
+    for item in results:
+        row = []
+        for key, _ in columns:
+            val = item.get(key, "")
+            if val is None:
+                val = ""
+            row.append(str(val))
+        writer.writerow(row)
+
+    payload = buf.getvalue().encode("utf-8")
+    filename = "docaro_ergebnisse.csv"
+    return Response(
+        payload,
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/api/results_summary")
+def api_results_summary():
+    """Liefert eine Zusammenfassung der aktuellen Ergebnisliste fuer das Statistik-Panel."""
+    results = _load_last_results() or []
+    total = len(results)
+
+    by_doctype: dict[str, int] = {}
+    by_supplier: dict[str, int] = {}
+    incomplete = 0
+    in_review = 0
+    quarantined = 0
+    today_count = 0
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    for item in results:
+        dt = (item.get("doc_type") or "SONSTIGES").strip() or "SONSTIGES"
+        by_doctype[dt] = by_doctype.get(dt, 0) + 1
+        sup = (item.get("supplier") or "").strip()
+        if sup and sup.lower() not in {"unbekannt", "-"}:
+            by_supplier[sup] = by_supplier.get(sup, 0) + 1
+        if item.get("date_missing") or item.get("supplier_missing"):
+            incomplete += 1
+        if item.get("needs_review"):
+            in_review += 1
+        if str(item.get("quarantined") or "") == "1":
+            quarantined += 1
+        if str(item.get("processed_at") or "").startswith(today_str):
+            today_count += 1
+
+    top_suppliers = sorted(by_supplier.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+    return jsonify({
+        "ok": True,
+        "total": total,
+        "incomplete": incomplete,
+        "in_review": in_review,
+        "quarantined": quarantined,
+        "today": today_count,
+        "by_doctype": by_doctype,
+        "top_suppliers": [{"supplier": s, "count": c} for s, c in top_suppliers],
+    })
 
 
 @app.post("/confirm_doc_number")

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Docaro Einstellungen</title>
+    <title>DocaroApp Einstellungen</title>
     <script>
       // Theme sofort setzen um Flash zu verhindern
       (function() {
@@ -15,6 +15,7 @@
     </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
     <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
+    <script src="{{ url_for('static', filename='desktop-actions.js') }}" defer></script>
   </head>
   <body>
     <main class="container">
@@ -163,6 +164,14 @@
             <a class="ghost" href="{{ url_for('index') }}">Abbrechen</a>
           </div>
         </form>
+      </section>
+
+      <section class="panel">
+        <h2>Diagnose &amp; Support</h2>
+        <p class="muted">Logs, Einstellungen und Systeminfo als ZIP exportieren – hilfreich, wenn du Support kontaktierst.</p>
+        <div class="form-actions">
+          <button type="button" data-diagnose-export>Logs als ZIP herunterladen</button>
+        </div>
       </section>
     </main>
   </body>

@@ -158,6 +158,9 @@ sudo -u docaro -H /opt/Docaro/.venv/bin/pip install -r requirements.txt
 
 # Prestart-Check (optional, testet Abhängigkeiten)
 sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/prestart_check.py | head -n 30
+
+# Produktions-Gate (empfohlen vor Inbetriebnahme)
+sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/production_readiness_check.py --env-file /etc/docaro/docaro.env
 ```
 
 ### 2.4 Environment-Datei vorbereiten (noch LEER, wird später synced)
@@ -498,6 +501,9 @@ rsync -aH -e "ssh -o PreferredAuthentications=password" ...
 ```bash
 # Prestart-Check manuell ausführen
 sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/prestart_check.py
+
+# Produktions-Gate manuell ausführen
+sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/production_readiness_check.py --env-file /etc/docaro/docaro.env
 
 # Fehlende Dependencies nachinstallieren
 sudo -u docaro -H /opt/Docaro/.venv/bin/pip install -r /opt/Docaro/requirements.txt

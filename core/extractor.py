@@ -120,6 +120,13 @@ LLM_ASSIST_TIMEOUT_SECONDS = float(getattr(config, "LLM_ASSIST_TIMEOUT_SECONDS",
 # mit stärkerer Vorverarbeitung (Kontrast/Schärfe/Threshold). Default bewusst
 # konservativ – kann per Env var angepasst werden.
 AGGRESSIVE_TESSERACT_RETRY_SCORE = int(os.getenv("DOCARO_OCR_AGGRESSIVE_RETRY_SCORE", "250"))
+OCR_VARIANT_RETRY_SCORE = int(os.getenv("DOCARO_OCR_VARIANT_RETRY_SCORE", str(getattr(config, "OCR_VARIANT_RETRY_SCORE", 520))))
+OCR_MIN_UPSCALE_LONG_SIDE = int(
+    os.getenv("DOCARO_OCR_MIN_UPSCALE_LONG_SIDE", str(getattr(config, "OCR_MIN_UPSCALE_LONG_SIDE", 1800)))
+)
+OCR_MIN_UPSCALE_SHORT_SIDE = int(
+    os.getenv("DOCARO_OCR_MIN_UPSCALE_SHORT_SIDE", str(getattr(config, "OCR_MIN_UPSCALE_SHORT_SIDE", 1200)))
+)
 
 
 def _render_dpi() -> int:
@@ -366,6 +373,8 @@ if not _POPPLER_OK:
     print("Warnung: Poppler/pdfinfo nicht gefunden. PDF-Konvertierung kann fehlschlagen.")
 
 SUPPLIER_KEYWORDS = {
+    "DEKRA": "Dekra",
+    "DEKRA Automobil": "Dekra",
     "Liebherr-Werk Ehingen": "Liebherr_Ehingen",
     "Liebherr-Werk Nenzing": "Liebherr_Nenzing",
     "KS-Logistic": "KSR",
@@ -626,6 +635,34 @@ def _is_never_supplier(value: str) -> bool:
     return any(term in norm for term in RECIPIENT_BLACKLIST)
 
 
+def _looks_like_dekra_report_supplier_hint(text: str) -> bool:
+    norm = _normalize_supplier_text(text or "")
+    if not norm:
+        return False
+    if re.search(r"\bdekra\b", norm, flags=re.IGNORECASE):
+        return True
+
+    report_markers = (
+        "berichts nr",
+        "berichtsnr",
+        "pruefbericht",
+        "untersuchungsbericht",
+        "hauptuntersuchung",
+        "sicherheitspruefung",
+        "pruefprotokoll",
+        "hu pruefung",
+    )
+    context_markers = (
+        "naechste hu",
+        "kennz",
+        "stvzo",
+        "vom ",
+    )
+    report_hits = sum(1 for marker in report_markers if marker in norm)
+    context_hits = sum(1 for marker in context_markers if marker in norm)
+    return report_hits >= 1 and context_hits >= 1
+
+
 # LABEL_PATTERNS und LABEL_PRIORITY aus constants.py verwendet
 
 MONTH_MAP = {
@@ -719,6 +756,37 @@ def _preprocess_for_ocr(image: Image.Image, aggressive: bool = False) -> Image.I
     return bw.convert("L")
 
 
+def _upscale_for_ocr(image: Image.Image) -> Image.Image:
+    """Skaliert kleine Scan-Renderings hoch, damit Tesseract nicht an Low-Res scheitert."""
+    try:
+        width, height = image.size
+    except Exception:
+        return image
+
+    if width <= 0 or height <= 0:
+        return image
+
+    long_side = max(width, height)
+    short_side = min(width, height)
+    pixels = width * height
+
+    if long_side >= OCR_MIN_UPSCALE_LONG_SIDE or short_side >= OCR_MIN_UPSCALE_SHORT_SIDE:
+        return image
+    if pixels > 1_800_000:
+        return image
+
+    scale = max(
+        OCR_MIN_UPSCALE_LONG_SIDE / float(long_side),
+        OCR_MIN_UPSCALE_SHORT_SIDE / float(short_side),
+    )
+    scale = min(scale, 2.4)
+    if scale <= 1.05:
+        return image
+
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    return image.resize(new_size, resample=Image.BICUBIC)
+
+
 def _downscale_for_ocr(image: Image.Image) -> Image.Image:
     """Downscale very large scans to keep OCR fast and avoid timeouts."""
     try:
@@ -756,6 +824,7 @@ def _ocr_image(
 
     if isinstance(image, Image.Image):
         image = _downscale_for_ocr(image)
+        image = _upscale_for_ocr(image)
         image = _preprocess_for_ocr(image, aggressive=aggressive_preprocess)
 
     effective_timeout = OCR_TIMEOUT_SECONDS if timeout is None else timeout
@@ -1056,7 +1125,17 @@ def _detect_osd_rotation(image) -> Optional[int]:
 
 
 def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
-    def _safe_ocr(rotation: int, use_paddle_fallback: bool = False) -> Tuple[str, str, int]:
+    def _safe_ocr(rotation: int, use_paddle_fallback: bool = False) -> Tuple[str, str, int, str]:
+        def _run_variant(config_value: str, aggressive: bool, label: str) -> Tuple[str, int, str]:
+            variant_text = _ocr_image(
+                image,
+                rotation=rotation,
+                config=config_value,
+                use_paddle=use_paddle_fallback,
+                aggressive_preprocess=aggressive,
+            )
+            return variant_text, _score_text(variant_text), label
+
         try:
             # First try with mild preprocessing.
             text_value = _ocr_image(image, rotation=rotation, use_paddle=use_paddle_fallback)
@@ -1067,35 +1146,57 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
                 if USE_PADDLEOCR and not use_paddle_fallback:
                     _LOGGER.info("Tesseract timeout, trying PaddleOCR fallback")
                     return _safe_ocr(rotation, use_paddle_fallback=True)
-                return "", "ocr_timeout", 0
+                return "", "ocr_timeout", 0, "timeout"
             # Bei anderen Fehlern auch PaddleOCR versuchen
             if USE_PADDLEOCR and not use_paddle_fallback:
                 try:
                     paddle_text = _ocr_image_paddle(image)
                     if paddle_text:
                         _LOGGER.info(f"Tesseract failed, PaddleOCR rescued: {len(paddle_text)} chars")
-                        return paddle_text, "", _score_text(paddle_text)
+                        return paddle_text, "", _score_text(paddle_text), "paddle_rescue"
                 except Exception:
                     pass
-            return "", f"ocr_failed: {exc}", 0
+            return "", f"ocr_failed: {exc}", 0, "error"
 
         base_score = _score_text(text_value)
+        best_text = text_value
+        best_score = base_score
+        best_variant = "default"
+
         # If score is very low, retry Tesseract once with aggressive preprocessing.
         if base_score < AGGRESSIVE_TESSERACT_RETRY_SCORE:
             try:
-                aggressive_text = _ocr_image(
-                    image,
-                    rotation=rotation,
-                    use_paddle=use_paddle_fallback,
-                    aggressive_preprocess=True,
+                aggressive_text, aggressive_score, aggressive_variant = _run_variant(
+                    "",
+                    True,
+                    "aggressive",
                 )
-                aggressive_score = _score_text(aggressive_text)
-                if aggressive_score > base_score * 1.15 and aggressive_text.strip():
-                    return aggressive_text, "", aggressive_score
+                if aggressive_score > best_score * 1.15 and aggressive_text.strip():
+                    best_text = aggressive_text
+                    best_score = aggressive_score
+                    best_variant = aggressive_variant
             except Exception:
                 pass
 
-        return text_value, "", base_score
+        if best_score < OCR_VARIANT_RETRY_SCORE:
+            for config_value, aggressive, label in (
+                ("--psm 6", False, "psm6"),
+                ("--psm 6", True, "psm6_aggressive"),
+                ("--psm 11", False, "psm11"),
+                ("--psm 11", True, "psm11_aggressive"),
+            ):
+                try:
+                    variant_text, variant_score, variant_label = _run_variant(config_value, aggressive, label)
+                except Exception:
+                    continue
+                if not variant_text.strip():
+                    continue
+                if variant_score > max(int(best_score * 1.08), best_score + 45):
+                    best_text = variant_text
+                    best_score = variant_score
+                    best_variant = variant_label
+
+        return best_text, "", best_score, best_variant
 
     if force_best:
         best_rotation = 0
@@ -1103,7 +1204,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
         best_score = -1
         candidates = _rotation_candidates_from_crops(image)
         for rotation, _ in candidates:
-            text_value, error, score = _safe_ocr(rotation)
+            text_value, error, score, _ = _safe_ocr(rotation)
             if error:
                 continue
             if score > best_score:
@@ -1120,7 +1221,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
             "score": str(best_score),
         }
 
-    text, error, base_score = _safe_ocr(rotation=0)
+    text, error, base_score, base_variant = _safe_ocr(rotation=0)
     if error:
         return {"text": "", "error": error}
 
@@ -1151,7 +1252,14 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
             _LOGGER.debug(f"PaddleOCR attempt failed: {e}")
 
     if not needs_rotation:
-        return {"text": text, "error": "", "rotation": "0", "rotation_reason": "", "score": str(base_score)}
+        return {
+            "text": text,
+            "error": "",
+            "rotation": "0",
+            "rotation_reason": "",
+            "score": str(base_score),
+            "ocr_variant": base_variant,
+        }
 
     rotation_reason = "low_text" if text_length < 200 else "no_keywords"
     osd_rotation = _detect_osd_rotation(image)
@@ -1169,6 +1277,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
                     "rotation": str(osd_rotation),
                     "rotation_reason": "osd",
                     "score": str(osd_score),
+                    "ocr_variant": base_variant,
                 }
             else:
                 # OSD rotation ist nicht besser; bleib bei 0°
@@ -1190,7 +1299,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
     for rotation, _ in candidates:
         if rotation == 0:
             continue
-        rotated_text, error, score = _safe_ocr(rotation)
+        rotated_text, error, score, _ = _safe_ocr(rotation)
         if error:
             continue
         if score > best_score:
@@ -1204,6 +1313,7 @@ def _ocr_single_image(image, force_best: bool = False) -> Dict[str, str]:
         "rotation": str(best_rotation),
         "rotation_reason": "crop" if best_rotation else rotation_reason,
         "score": str(best_score),
+        "ocr_variant": base_variant,
     }
 
 
@@ -2267,10 +2377,8 @@ def detect_supplier_detailed(
         )
 
     dekra_detected = (
-        re.search(r"\bdekra\b", letterhead_norm, flags=re.IGNORECASE) is not None
-        or "dekra autom" in letterhead_norm
-        or "dekra industrial" in letterhead_norm
-        or "dekra certification" in letterhead_norm
+        _looks_like_dekra_report_supplier_hint(letterhead_text)
+        or _looks_like_dekra_report_supplier_hint(header_text + "\n" + body_text)
     )
     if dekra_detected:
         candidates.insert(
@@ -2525,7 +2633,46 @@ def build_new_filename(
     date_format: str = DEFAULT_DATE_FORMAT,
     max_supplier_len: int = 40,
     max_base_len: int = 120,
+    template: Optional[str] = None,
+    doctype: Optional[str] = None,
 ) -> str:
+    # Welle 13A: Wenn ein gueltiges Template uebergeben wurde, nutze die Template-Engine.
+    if template:
+        try:
+            from core import naming_templates as _nt
+            if _nt.is_valid_template(template):
+                ctx = _nt.build_context(
+                    supplier=supplier or "Unbekannt",
+                    date_obj=date_obj,
+                    date_format=date_format,
+                    doc_number=delivery_note_nr or "",
+                    doctype=doctype or "",
+                )
+                base = _nt.render_template(template, ctx)
+                base = _truncate_with_hash(base, max_base_len)
+                return f"{base}.pdf"
+        except Exception:
+            # Bei Fehlern fallback auf Standard-Logik
+            pass
+    else:
+        # Kein explizites Template: aktiven Provider (User-Prefs) befragen
+        try:
+            from core import naming_templates as _nt
+            active = _nt.get_active_template()
+            if active:
+                ctx = _nt.build_context(
+                    supplier=supplier or "Unbekannt",
+                    date_obj=date_obj,
+                    date_format=date_format,
+                    doc_number=delivery_note_nr or "",
+                    doctype=doctype or "",
+                )
+                base = _nt.render_template(active, ctx)
+                base = _truncate_with_hash(base, max_base_len)
+                return f"{base}.pdf"
+        except Exception:
+            pass
+
     if date_obj is not None:
         date_part = date_obj.strftime(date_format)
     else:

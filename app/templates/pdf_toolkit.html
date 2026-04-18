@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <title>PDF-Toolkit – DocaroApp</title>
+    <script>
+      (function() {
+        const isDarkMode = localStorage.getItem('docaro-dark-mode');
+        if (isDarkMode === 'true' || (isDarkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark-mode');
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
+    <script src="{{ url_for('static', filename='desktop-actions.js') }}" defer></script>
+    <style>
+      .toolkit-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 20px;
+        border-bottom: 2px solid var(--border);
+        padding-bottom: 0;
+      }
+      .toolkit-tabs button {
+        background: none;
+        color: var(--muted);
+        border: none;
+        border-radius: 8px 8px 0 0;
+        padding: 10px 20px;
+        font-size: 0.95rem;
+        cursor: pointer;
+        font-weight: 600;
+        transition: color 0.15s, background 0.15s;
+        margin-bottom: -2px;
+        border-bottom: 2px solid transparent;
+      }
+      .toolkit-tabs button:hover { color: var(--accent); }
+      .toolkit-tabs button.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+        background: none;
+      }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
+
+      .toolkit-form { display: flex; flex-direction: column; gap: 14px; }
+      .toolkit-form label { font-weight: 600; font-size: 0.9rem; color: var(--muted); }
+
+      .drop-zone {
+        border: 2px dashed var(--border);
+        border-radius: 10px;
+        padding: 28px 20px;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color 0.2s, background 0.2s;
+        background: var(--bg);
+      }
+      .drop-zone:hover, .drop-zone.dragover {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+      }
+      .drop-zone input[type="file"] { display: none; }
+      .drop-zone .drop-hint { color: var(--muted); font-size: 0.9rem; margin-top: 6px; }
+      .drop-zone .file-list { margin-top: 10px; text-align: left; }
+      .drop-zone .file-list li {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 0.88rem;
+      }
+      .drop-zone .file-list li button {
+        background: none; color: var(--muted); border: none; padding: 2px 6px;
+        font-size: 0.85rem; cursor: pointer; border-radius: 4px;
+      }
+      .drop-zone .file-list li button:hover { color: #c0392b; background: #fdf2f2; }
+
+      .option-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      .option-row label { font-weight: 500; color: var(--text); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+      select, input[type="text"] {
+        border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+        background: var(--panel); color: var(--text); font-size: 0.9rem;
+      }
+      select:focus, input[type="text"]:focus { outline: 2px solid var(--accent); }
+
+      .result-box {
+        display: none; margin-top: 16px; padding: 14px 16px;
+        background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+        border: 1px solid var(--accent); border-radius: 8px;
+      }
+      .result-box.visible { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .result-box .result-info { flex: 1; font-size: 0.9rem; color: var(--text); }
+      .result-box .result-info small { display: block; color: var(--muted); margin-top: 3px; }
+      .result-box a.dl-btn {
+        display: inline-block; background: var(--accent); color: #fff;
+        padding: 8px 16px; border-radius: 7px; text-decoration: none;
+        font-weight: 600; font-size: 0.9rem; white-space: nowrap;
+      }
+      .result-box a.dl-btn:hover { opacity: 0.88; }
+      .result-box .reveal-btn {
+        background: var(--panel); color: var(--accent);
+        border: 1px solid var(--accent);
+        padding: 7px 14px; border-radius: 7px; cursor: pointer;
+        font-weight: 600; font-size: 0.88rem; white-space: nowrap;
+      }
+      .result-box .reveal-btn:hover { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+      .result-box .reveal-btn.reveal-failed { background: #fdf2f2; color: #922; border-color: #c66; }
+
+      .error-box {
+        display: none; margin-top: 12px; padding: 12px 14px;
+        background: #fdf2f2; border: 1px solid #e8b4b4; border-radius: 8px;
+        color: #922; font-size: 0.9rem;
+      }
+      .error-box.visible { display: block; }
+
+      .spinner {
+        display: none; width: 18px; height: 18px;
+        border: 3px solid var(--border); border-top-color: var(--accent);
+        border-radius: 50%; animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .submit-row { display: flex; align-items: center; gap: 12px; }
+      .submit-row button[type="submit"] { padding: 10px 22px; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>PDF-Toolkit</h1>
+        <p>Zusammenführen, Teilen, Komprimieren, OCR – vollständig lokal, keine Cloud.</p>
+        <div class="meta-links">
+          <span class="meta-links-right">
+            <a href="{{ url_for('index') }}">Zurück zur Übersicht</a>
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('settings_page') }}">Einstellungen</a>
+            <span aria-hidden="true">·</span>
+            <form action="{{ url_for('logout') }}" method="post" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer;color:var(--accent);font-weight:600">Logout</button>
+            </form>
+          </span>
+          <button id="theme-toggle-btn" type="button" aria-label="Design-Modus umschalten">🌙</button>
+        </div>
+      </header>
+
+      <div class="panel">
+        <nav class="toolkit-tabs" role="tablist">
+          <button role="tab" class="active" data-tab="merge">Zusammenführen</button>
+          <button role="tab" data-tab="split">Teilen</button>
+          <button role="tab" data-tab="compress">Komprimieren</button>
+          <button role="tab" data-tab="ocr">OCR</button>
+        </nav>
+
+        <!-- MERGE -->
+        <div class="tab-panel active" id="tab-merge">
+          <h2>PDFs zusammenführen</h2>
+          <p style="color:var(--muted);margin-bottom:16px;font-size:0.9rem">Mehrere PDFs in der gewünschten Reihenfolge zu einer Datei zusammenführen.</p>
+          <form class="toolkit-form" id="form-merge">
+            <div>
+              <label>PDF-Dateien (mind. 2, Reihenfolge = Merge-Reihenfolge)</label>
+              <div class="drop-zone" id="drop-merge" tabindex="0">
+                <input type="file" id="input-merge" accept=".pdf" multiple />
+                <div>Dateien hier ablegen oder <strong style="color:var(--accent)">klicken zum Auswählen</strong></div>
+                <div class="drop-hint">Nur PDF-Dateien, mehrere möglich</div>
+                <ul class="file-list" id="list-merge"></ul>
+              </div>
+            </div>
+            <div class="submit-row">
+              <button type="submit">Zusammenführen</button>
+              <div class="spinner" id="spin-merge"></div>
+            </div>
+          </form>
+          <div class="result-box" id="result-merge">
+            <div class="result-info">
+              <strong id="result-merge-name"></strong>
+              <small id="result-merge-info"></small>
+            </div>
+            <a class="dl-btn" id="result-merge-link" href="#">Herunterladen</a>
+            <button type="button" class="reveal-btn" id="result-merge-reveal" data-desktop-only hidden>Im Explorer zeigen</button>
+          </div>
+          <div class="error-box" id="error-merge"></div>
+        </div>
+
+        <!-- SPLIT -->
+        <div class="tab-panel" id="tab-split">
+          <h2>PDF teilen</h2>
+          <p style="color:var(--muted);margin-bottom:16px;font-size:0.9rem">Jede Seite als eigene Datei oder nach Seitenbereichen aufteilen. Ergebnis als ZIP.</p>
+          <form class="toolkit-form" id="form-split">
+            <div>
+              <label>PDF-Datei</label>
+              <div class="drop-zone" id="drop-split" tabindex="0">
+                <input type="file" id="input-split" accept=".pdf" />
+                <div>Datei hier ablegen oder <strong style="color:var(--accent)">klicken zum Auswählen</strong></div>
+                <div class="drop-hint">Nur eine PDF-Datei</div>
+                <ul class="file-list" id="list-split"></ul>
+              </div>
+            </div>
+            <div>
+              <label>Aufteilungsmodus</label>
+              <div class="option-row">
+                <label><input type="radio" name="split-mode" value="pages" checked /> Jede Seite einzeln</label>
+                <label><input type="radio" name="split-mode" value="ranges" /> Seitenbereiche</label>
+              </div>
+            </div>
+            <div id="ranges-row" style="display:none">
+              <label>Seitenbereiche (z.&thinsp;B. <code>1-3, 5, 7-9</code>)</label>
+              <input type="text" id="input-ranges" placeholder="1-3, 5, 7-9" style="width:100%;max-width:320px" />
+            </div>
+            <div class="submit-row">
+              <button type="submit">Teilen</button>
+              <div class="spinner" id="spin-split"></div>
+            </div>
+          </form>
+          <div class="result-box" id="result-split">
+            <div class="result-info">
+              <strong id="result-split-name"></strong>
+              <small id="result-split-info"></small>
+            </div>
+            <a class="dl-btn" id="result-split-link" href="#">Herunterladen (ZIP)</a>
+            <button type="button" class="reveal-btn" id="result-split-reveal" data-desktop-only hidden>Im Explorer zeigen</button>
+          </div>
+          <div class="error-box" id="error-split"></div>
+        </div>
+
+        <!-- COMPRESS -->
+        <div class="tab-panel" id="tab-compress">
+          <h2>PDF komprimieren</h2>
+          <p style="color:var(--muted);margin-bottom:16px;font-size:0.9rem">Dateigröße reduzieren. Stark gescannte Dokumente profitieren am meisten.</p>
+          <form class="toolkit-form" id="form-compress">
+            <div>
+              <label>PDF-Datei</label>
+              <div class="drop-zone" id="drop-compress" tabindex="0">
+                <input type="file" id="input-compress" accept=".pdf" />
+                <div>Datei hier ablegen oder <strong style="color:var(--accent)">klicken zum Auswählen</strong></div>
+                <div class="drop-hint">Nur eine PDF-Datei</div>
+                <ul class="file-list" id="list-compress"></ul>
+              </div>
+            </div>
+            <div>
+              <label>Qualitätsstufe</label>
+              <div class="option-row">
+                <label><input type="radio" name="compress-quality" value="high" /> Hoch (wenig Komprimierung)</label>
+                <label><input type="radio" name="compress-quality" value="medium" checked /> Mittel (empfohlen)</label>
+                <label><input type="radio" name="compress-quality" value="low" /> Niedrig (stärkste Komprimierung)</label>
+              </div>
+            </div>
+            <div class="submit-row">
+              <button type="submit">Komprimieren</button>
+              <div class="spinner" id="spin-compress"></div>
+            </div>
+          </form>
+          <div class="result-box" id="result-compress">
+            <div class="result-info">
+              <strong id="result-compress-name"></strong>
+              <small id="result-compress-info"></small>
+            </div>
+            <a class="dl-btn" id="result-compress-link" href="#">Herunterladen</a>
+            <button type="button" class="reveal-btn" id="result-compress-reveal" data-desktop-only hidden>Im Explorer zeigen</button>
+          </div>
+          <div class="error-box" id="error-compress"></div>
+        </div>
+
+        <!-- OCR -->
+        <div class="tab-panel" id="tab-ocr">
+          <h2>OCR – Text erkennen</h2>
+          <p style="color:var(--muted);margin-bottom:16px;font-size:0.9rem">Gescannte PDFs durchsuchbar machen. Fügt eine unsichtbare Textschicht hinzu.</p>
+          <form class="toolkit-form" id="form-ocr">
+            <div>
+              <label>PDF-Datei (gescannt)</label>
+              <div class="drop-zone" id="drop-ocr" tabindex="0">
+                <input type="file" id="input-ocr" accept=".pdf" />
+                <div>Datei hier ablegen oder <strong style="color:var(--accent)">klicken zum Auswählen</strong></div>
+                <div class="drop-hint">Nur eine PDF-Datei</div>
+                <ul class="file-list" id="list-ocr"></ul>
+              </div>
+            </div>
+            <div>
+              <label>OCR-Sprache</label>
+              <select id="select-lang" name="lang" {% if not ocr_enabled %}disabled{% endif %}>
+                {% if ocr_lang_options %}
+                  {% for option in ocr_lang_options %}
+                    <option value="{{ option.value }}" {% if loop.first %}selected{% endif %}>{{ option.label }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option value="" selected>Keine OCR-Sprache verfuegbar</option>
+                {% endif %}
+              </select>
+              {% if ocr_status_message %}
+                <div class="drop-hint">{{ ocr_status_message }}</div>
+              {% endif %}
+            </div>
+            <div class="submit-row">
+              <button type="submit" {% if not ocr_enabled %}disabled{% endif %}>OCR starten</button>
+              <div class="spinner" id="spin-ocr"></div>
+            </div>
+          </form>
+          <div class="result-box" id="result-ocr">
+            <div class="result-info">
+              <strong id="result-ocr-name"></strong>
+              <small id="result-ocr-info">Textschicht wurde hinzugefügt.</small>
+            </div>
+            <a class="dl-btn" id="result-ocr-link" href="#">Herunterladen</a>
+            <button type="button" class="reveal-btn" id="result-ocr-reveal" data-desktop-only hidden>Im Explorer zeigen</button>
+          </div>
+          <div class="error-box" id="error-ocr"></div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+    (function () {
+      // Tab-Navigation
+      document.querySelectorAll('.toolkit-tabs button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.toolkit-tabs button').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        });
+      });
+
+      // Drop-Zones
+      function setupDropZone(zoneId, inputId, listId, multi) {
+        const zone = document.getElementById(zoneId);
+        const input = document.getElementById(inputId);
+        const list = document.getElementById(listId);
+
+        zone.addEventListener('click', () => input.click());
+        zone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') input.click(); });
+        zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+        zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+        zone.addEventListener('drop', e => {
+          e.preventDefault(); zone.classList.remove('dragover');
+          addFiles(e.dataTransfer.files);
+        });
+        input.addEventListener('change', () => addFiles(input.files));
+
+        function addFiles(fileList) {
+          if (!multi) input._files = [];
+          if (!input._files) input._files = [];
+          Array.from(fileList).forEach(f => {
+            if (!f.name.toLowerCase().endsWith('.pdf')) return;
+            if (!multi) input._files = [f];
+            else input._files.push(f);
+          });
+          renderList();
+        }
+
+        function renderList() {
+          list.innerHTML = '';
+          (input._files || []).forEach((f, i) => {
+            const li = document.createElement('li');
+            li.innerHTML = `<span>${f.name} <small style="color:var(--muted)">(${(f.size/1024).toFixed(0)} KB)</small></span>`;
+            if (multi) {
+              const rm = document.createElement('button');
+              rm.textContent = '×';
+              rm.type = 'button';
+              rm.addEventListener('click', (e) => { e.stopPropagation(); input._files.splice(i, 1); renderList(); });
+              li.appendChild(rm);
+            }
+            list.appendChild(li);
+          });
+        }
+      }
+
+      setupDropZone('drop-merge', 'input-merge', 'list-merge', true);
+      setupDropZone('drop-split', 'input-split', 'list-split', false);
+      setupDropZone('drop-compress', 'input-compress', 'list-compress', false);
+      setupDropZone('drop-ocr', 'input-ocr', 'list-ocr', false);
+
+      // Split-Modus Toggle
+      document.querySelectorAll('input[name="split-mode"]').forEach(r => {
+        r.addEventListener('change', () => {
+          document.getElementById('ranges-row').style.display =
+            document.querySelector('input[name="split-mode"]:checked').value === 'ranges' ? '' : 'none';
+        });
+      });
+
+      // Generischer API-Submit
+      function handleForm(formId, endpoint, buildData, resultId, errorId, spinId, onSuccess) {
+        document.getElementById(formId).addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const result = document.getElementById(resultId);
+          const errorBox = document.getElementById(errorId);
+          const spin = document.getElementById(spinId);
+          result.classList.remove('visible');
+          errorBox.classList.remove('visible');
+          spin.style.display = 'inline-block';
+
+          const fd = buildData();
+          if (!fd) { spin.style.display = 'none'; return; }
+
+          try {
+            const resp = await fetch('/pdf-toolkit/' + endpoint, {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content },
+              body: fd,
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) {
+              errorBox.textContent = data.error || 'Unbekannter Fehler.';
+              errorBox.classList.add('visible');
+            } else {
+              onSuccess(data);
+              result.classList.add('visible');
+            }
+          } catch (err) {
+            errorBox.textContent = 'Netzwerkfehler: ' + err.message;
+            errorBox.classList.add('visible');
+          } finally {
+            spin.style.display = 'none';
+          }
+        });
+      }
+
+      // MERGE
+      handleForm('form-merge', 'merge', () => {
+        const files = document.getElementById('input-merge')._files || [];
+        if (files.length < 2) { alert('Bitte mindestens 2 PDF-Dateien auswählen.'); return null; }
+        const fd = new FormData();
+        files.forEach(f => fd.append('files', f));
+        return fd;
+      }, 'result-merge', 'error-merge', 'spin-merge', (data) => {
+        document.getElementById('result-merge-name').textContent = data.filename;
+        document.getElementById('result-merge-info').textContent = '';
+        document.getElementById('result-merge-link').href = '/pdf-toolkit/download/' + data.token;
+        attachReveal('result-merge-reveal', data.path);
+        notifyDone('Zusammengeführt', data.filename + ' ist bereit.');
+      });
+
+      // SPLIT
+      handleForm('form-split', 'split', () => {
+        const files = document.getElementById('input-split')._files || [];
+        if (!files.length) { alert('Bitte eine PDF-Datei auswählen.'); return null; }
+        const fd = new FormData();
+        fd.append('file', files[0]);
+        fd.append('mode', document.querySelector('input[name="split-mode"]:checked').value);
+        fd.append('ranges', document.getElementById('input-ranges').value);
+        return fd;
+      }, 'result-split', 'error-split', 'spin-split', (data) => {
+        document.getElementById('result-split-name').textContent = data.filename;
+        document.getElementById('result-split-info').textContent = data.parts + ' Teile erstellt.';
+        document.getElementById('result-split-link').href = '/pdf-toolkit/download/' + data.token;
+        attachReveal('result-split-reveal', data.path);
+        notifyDone('Teilen fertig', data.parts + ' Teile als ZIP bereit.');
+      });
+
+      // COMPRESS
+      handleForm('form-compress', 'compress', () => {
+        const files = document.getElementById('input-compress')._files || [];
+        if (!files.length) { alert('Bitte eine PDF-Datei auswählen.'); return null; }
+        const fd = new FormData();
+        fd.append('file', files[0]);
+        fd.append('quality', document.querySelector('input[name="compress-quality"]:checked').value);
+        return fd;
+      }, 'result-compress', 'error-compress', 'spin-compress', (data) => {
+        document.getElementById('result-compress-name').textContent = data.filename;
+        const info = data.savings_pct > 0
+          ? `${data.original_kb} KB → ${data.compressed_kb} KB (${data.savings_pct}% kleiner)`
+          : `${data.original_kb} KB → ${data.compressed_kb} KB`;
+        document.getElementById('result-compress-info').textContent = info;
+        document.getElementById('result-compress-link').href = '/pdf-toolkit/download/' + data.token;
+        attachReveal('result-compress-reveal', data.path);
+        notifyDone('Komprimiert', `${data.filename} – ${data.savings_pct}% kleiner.`);
+      });
+
+      // OCR
+      handleForm('form-ocr', 'ocr', () => {
+        const files = document.getElementById('input-ocr')._files || [];
+        if (!files.length) { alert('Bitte eine PDF-Datei auswählen.'); return null; }
+        const fd = new FormData();
+        fd.append('file', files[0]);
+        fd.append('lang', document.getElementById('select-lang').value);
+        return fd;
+      }, 'result-ocr', 'error-ocr', 'spin-ocr', (data) => {
+        document.getElementById('result-ocr-name').textContent = data.filename;
+        document.getElementById('result-ocr-link').href = '/pdf-toolkit/download/' + data.token;
+        attachReveal('result-ocr-reveal', data.path);
+        notifyDone('OCR fertig', data.filename + ' ist durchsuchbar.');
+      });
+
+      function attachReveal(buttonId, path) {
+        const btn = document.getElementById(buttonId);
+        if (!btn) return;
+        if (path) {
+          btn.setAttribute('data-reveal-path', path);
+        } else {
+          btn.removeAttribute('data-reveal-path');
+        }
+      }
+
+      function notifyDone(title, body) {
+        if (window.DocaroDesktop && typeof window.DocaroDesktop.notify === 'function') {
+          window.DocaroDesktop.notify(title, body);
+        }
+      }
+
+    })();
+    </script>
+  </body>
+</html>

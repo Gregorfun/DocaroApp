@@ -8,6 +8,15 @@ User=docaro
 Group=docaro
 WorkingDirectory=/opt/docaro
 EnvironmentFile=/etc/docaro/docaro.env
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/opt/docaro/data
 
 # Preflight: check system + python deps
 ExecStartPre=/opt/docaro/.venv/bin/python /opt/docaro/tools/prestart_check.py
@@ -22,6 +31,7 @@ ExecStart=/opt/docaro/.venv/bin/gunicorn \
 
 Restart=on-failure
 RestartSec=2
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

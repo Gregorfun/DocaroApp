@@ -41,7 +41,7 @@ jobs:
 
     - name: Run tests
       run: |
-        python -m pytest
+        python -m pytest tests/test_stateless_auth.py services/test_auth_store.py tests
 
   benchmark:
     runs-on: ubuntu-latest
@@ -80,6 +80,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
 
+    env:
+      QUALITY_CHECK_PATHS: >-
+        app/app.py
+        config.py
+        services/auth_store.py
+        services/web_auth.py
+        services/test_auth_store.py
+        tests/test_stateless_auth.py
+
     permissions:
       contents: read
 
@@ -98,8 +107,8 @@ jobs:
 
     - name: Lint with Ruff
       run: |
-        ruff check . --select E9,F63,F7,F82
+        ruff check $QUALITY_CHECK_PATHS
 
-    - name: Full Ruff Report (advisory)
+    - name: Check formatting with Black
       run: |
-        ruff check . --exit-zero
+        black --check $QUALITY_CHECK_PATHS

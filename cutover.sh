@@ -91,10 +91,19 @@ sudo rsync -aH "$QUELLSERVER:/etc/nginx/sites-available/docaro*" /etc/nginx/site
 echo "✅ Config synchronisiert"
 
 # ─────────────────────────────────────────────────────────────
+# TECHNISCHE FREIGABE: Abhaengigkeiten + Produktions-Gate
+# ─────────────────────────────────────────────────────────────
+echo ""
+echo "🛡️  Schritt 3/5: Technische Freigabe pruefen..."
+sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/prestart_check.py
+sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/production_readiness_check.py --env-file /etc/docaro/docaro.env
+echo "✅ Technische Freigabe erfolgreich"
+
+# ─────────────────────────────────────────────────────────────
 # SCHRITT 4: Docker-Volumes synchronisieren (optional)
 # ─────────────────────────────────────────────────────────────
 echo ""
-echo "🐳 Optional: Docker-Volumes synchronisieren..."
+echo "🐳 Schritt 4/5: Docker-Volumes synchronisieren (optional)..."
 
 if ssh "$QUELLSERVER" "[ -d /opt/docaro/docker/qdrant_storage ]" 2>/dev/null; then
   echo "  → Qdrant Storage..."
@@ -126,7 +135,7 @@ echo "✅ Docker-Volumes synchronisiert (falls vorhanden)"
 # SCHRITT 5: Services starten
 # ─────────────────────────────────────────────────────────────
 echo ""
-echo "🚀 Schritt 3/4: Services starten..."
+echo "🚀 Schritt 5/5: Services starten..."
 sudo systemctl enable --now docaro docaro-worker
 sleep 3
 sudo systemctl status docaro docaro-worker --no-pager -l
@@ -136,7 +145,7 @@ echo "✅ Services gestartet"
 # SCHRITT 6: Health-Check
 # ─────────────────────────────────────────────────────────────
 echo ""
-echo "🔍 Schritt 4/4: Health-Check..."
+echo "🔍 Post-Start Health-Check..."
 
 # Services aktiv?
 if sudo systemctl is-active --quiet docaro && sudo systemctl is-active --quiet docaro-worker; then
@@ -157,8 +166,8 @@ fi
 
 # HTTP antwortet?
 sleep 2
-if curl -sS -m 10 http://127.0.0.1:5001/ > /dev/null 2>&1; then
-  echo "✅ HTTP: antwortet (http://127.0.0.1:5001)"
+if curl -sS -m 10 http://127.0.0.1:5001/health > /dev/null 2>&1; then
+  echo "✅ HTTP: /health antwortet (http://127.0.0.1:5001/health)"
 else
   echo "⚠️  HTTP: noch nicht erreichbar (Service startet noch?)"
   echo "   Logs prüfen: sudo journalctl -u docaro -n 50"

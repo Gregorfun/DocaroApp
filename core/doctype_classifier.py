@@ -83,14 +83,20 @@ class DocTypeClassifier:
         self.lieferschein_strong = [
             "lieferschein",
             "delivery note",
+            "lieferscheinnummer",
             "lieferschein-nr",
+            "lieferschein nr",
             "lieferscheinnr",
+            "l-schein",
+            "l schein",
             "lieferdatum",
             "delivery date",
             "warenempfänger",
         ]
         self.lieferschein_support = [
             "belegnummer",
+            "ls-nr",
+            "ls nr",
             "versand",
             "shipment",
             "warenausgang",
@@ -140,10 +146,19 @@ class DocTypeClassifier:
             "prüfbericht",
             "untersuchungsbericht",
             "hauptuntersuchung",
+            "berichts nr",
+            "berichtsnr",
+            "pruefprotokoll",
+            "pruefprotokoll nr",
             "hu-bericht",
             "hu bericht",
         ]
         self.pruefbericht_support = [
+            "sicherheitspruefung",
+            "sicherheitsprüfung",
+            "hu pruefung",
+            "naechste hu",
+            "nächste hu",
             "stvzo",
             "§ 29",
             "maengel",
@@ -159,8 +174,34 @@ class DocTypeClassifier:
         """Normalisiert Text für robuste Keyword-Suche."""
         text = text.lower()
         text = text.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+        text = re.sub(r"[_:/\\-]+", " ", text)
         text = re.sub(r'\s+', ' ', text)
         return text
+
+    def _looks_like_dekra_pruefbericht(self, text: str) -> bool:
+        norm = self._normalize_text(text)
+        if not norm:
+            return False
+        report_markers = [
+            "dekra",
+            "berichts nr",
+            "berichtsnr",
+            "pruefbericht",
+            "untersuchungsbericht",
+            "hauptuntersuchung",
+            "pruefprotokoll",
+            "sicherheitspruefung",
+        ]
+        context_markers = [
+            "naechste hu",
+            "hu pruefung",
+            "kennz",
+            "stvzo",
+            "vom ",
+        ]
+        report_hits = sum(1 for marker in report_markers if marker in norm)
+        context_hits = sum(1 for marker in context_markers if marker in norm)
+        return report_hits >= 2 or (report_hits >= 1 and context_hits >= 2)
 
     def _weighted_hits(self, segment_text: str, keywords: List[str], *, weight: float, add: float) -> tuple[float, List[str]]:
         score = 0.0
@@ -319,6 +360,9 @@ class DocTypeClassifier:
         
         # Supplier-Hints
         scores = self._apply_supplier_hints(scores, supplier_canonical)
+
+        if best_effort_dekra := self._looks_like_dekra_pruefbericht(header_text + "\n" + body_text):
+            scores[self.DOCTYPE_PRUEFBERICHT] += 0.45
         
         # Übernahmeschein sofort, wenn strong keyword in header/body
         header_body_norm = self._normalize_text(header_text + "\n" + body_text)
@@ -330,6 +374,20 @@ class DocTypeClassifier:
                 evidence=evidences.get(self.DOCTYPE_UEBERNAHMESCHEIN, [])[:5],
                 scores=scores,
                 evidence_by_type={k: v[:8] for k, v in evidences.items()},
+            )
+
+        if best_effort_dekra and scores[self.DOCTYPE_PRUEFBERICHT] > 0:
+            conf = min(0.99, 0.82 + min(scores[self.DOCTYPE_PRUEFBERICHT], 1.0) * 0.12)
+            dekra_evidence = evidences.get(self.DOCTYPE_PRUEFBERICHT, [])[:5] or ["dekra_report_pattern"]
+            evidence_by_type = {k: v[:8] for k, v in evidences.items()}
+            if not evidence_by_type.get(self.DOCTYPE_PRUEFBERICHT):
+                evidence_by_type[self.DOCTYPE_PRUEFBERICHT] = ["dekra_report_pattern"]
+            return DocTypeResult(
+                doc_type=self.DOCTYPE_PRUEFBERICHT,
+                confidence=conf,
+                evidence=dekra_evidence,
+                scores=scores,
+                evidence_by_type=evidence_by_type,
             )
 
         # Bester Typ

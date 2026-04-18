@@ -63,6 +63,17 @@
 ]}
 ```
 
+### Produktions-Gate vor Service-Start
+
+```bash
+sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/prestart_check.py
+sudo -u docaro -H /opt/Docaro/.venv/bin/python /opt/Docaro/tools/production_readiness_check.py --env-file /etc/docaro/docaro.env
+```
+
+Der zweite Check prueft die produktionsrelevanten Schalter wie Auth-Zwang,
+CSRF, Rate-Limits, Cookie-Sicherheit sowie offensichtliche Platzhalter in den
+Vertriebs-/Betriebsdokumenten.
+
 ---
 
 ## 🚀 Nächster Schritt: CUTOVER (Phase 3)

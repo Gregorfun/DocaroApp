@@ -41,7 +41,7 @@ try {
 Start-Sleep -Seconds 1
 $check = Get-NetTCPConnection -LocalPort $APP_PORT -State Listen -ErrorAction SilentlyContinue
 if ($check) {
-	Write-Host "⚠ Port $APP_PORT ist noch belegt!" -ForegroundColor Yellow
+	Write-Host "WARNUNG: Port $APP_PORT ist noch belegt!" -ForegroundColor Yellow
 } else {
-	Write-Host "✓ Docaro erfolgreich gestoppt." -ForegroundColor Green
+	Write-Host "Docaro erfolgreich gestoppt." -ForegroundColor Green
 }

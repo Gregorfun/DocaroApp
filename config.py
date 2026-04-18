@@ -1,12 +1,23 @@
 import os
+import sys
 import logging
 import json
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
+
+def _resolve_runtime_base_dir() -> Path:
+    override = os.getenv("DOCARO_RUNTIME_BASE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 class Config:
     # Repo root (D:\Docaro) – config.py liegt im Root-Verzeichnis.
-    BASE_DIR = Path(__file__).resolve().parent
+    BASE_DIR = _resolve_runtime_base_dir()
     DATA_DIR = BASE_DIR / "data"
     LOG_DIR = DATA_DIR / "logs"
 
@@ -37,7 +48,12 @@ class Config:
     USE_PADDLEOCR = os.getenv("DOCARO_USE_PADDLEOCR", "0") == "1"
     PADDLEOCR_LANG = os.getenv("DOCARO_PADDLEOCR_LANG", "german")
     PADDLEOCR_FALLBACK_THRESHOLD = int(os.getenv("DOCARO_PADDLEOCR_FALLBACK_THRESHOLD", "400"))  # Score-Schwelle
-    PADDLEOCR_ENSEMBLE_FIELDS = os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"  # Ensemble für kritische Felder
+    PADDLEOCR_ENSEMBLE_FIELDS = (
+        os.getenv("DOCARO_PADDLEOCR_ENSEMBLE_FIELDS", "0") == "1"
+    )  # Ensemble für kritische Felder
+    OCR_VARIANT_RETRY_SCORE = int(os.getenv("DOCARO_OCR_VARIANT_RETRY_SCORE", "520"))
+    OCR_MIN_UPSCALE_LONG_SIDE = int(os.getenv("DOCARO_OCR_MIN_UPSCALE_LONG_SIDE", "1800"))
+    OCR_MIN_UPSCALE_SHORT_SIDE = int(os.getenv("DOCARO_OCR_MIN_UPSCALE_SHORT_SIDE", "1200"))
     # Tabellen-Intelligence (inspiriert von HF Spaces wie Table-to-CSV / table-extraction)
     TABLE_INTELLIGENCE_ENABLED = os.getenv("DOCARO_TABLE_INTELLIGENCE_ENABLED", "1") == "1"
     TABLE_INTELLIGENCE_MAX_PAGES = int(os.getenv("DOCARO_TABLE_INTELLIGENCE_MAX_PAGES", "2"))
@@ -71,12 +87,13 @@ class Config:
     EMBEDDING_MODEL = os.getenv("DOCARO_EMBEDDING_MODEL")
 
     # Seed-User (optional). Passwort NIE committen, nur via ENV setzen.
-    SEED_EMAIL_DEFAULT = os.getenv("DOCARO_SEED_EMAIL", "g.machuletz@bracht-autokrane.de")
+    SEED_EMAIL_DEFAULT = os.getenv("DOCARO_SEED_EMAIL", "admin@docaro.local")
 
     @staticmethod
     def _get_or_create_secret_key() -> str:
         """Generiert oder lädt den persistenten SECRET_KEY."""
         import secrets
+
         Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
         if Config.SECRET_KEY_FILE.exists():
             try:
@@ -90,8 +107,8 @@ class Config:
             # Datei verstecken (Windows)
             if os.name == "nt":
                 import subprocess
-                subprocess.run(["attrib", "+H", str(Config.SECRET_KEY_FILE)],
-                             check=False, capture_output=True)
+
+                subprocess.run(["attrib", "+H", str(Config.SECRET_KEY_FILE)], check=False, capture_output=True)
         except Exception:
             pass
         return new_key
@@ -126,10 +143,7 @@ class Config:
 
         # File Handler mit Rotation
         file_handler = RotatingFileHandler(
-            Config.LOG_DIR / "docaro.log",
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding="utf-8"
+            Config.LOG_DIR / "docaro.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10MB
         )
         file_handler.setLevel(logging.INFO if not Config.DEBUG else logging.DEBUG)
         file_handler.setFormatter(formatter)

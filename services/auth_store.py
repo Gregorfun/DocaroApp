@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -35,10 +36,19 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def _managed_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
+    conn = _connect(db_path)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def init_auth_db(db_path: Path) -> None:
-    with _connect(db_path) as conn:
-        conn.execute(
-            """
+    with _managed_connection(db_path) as conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE,
@@ -46,8 +56,7 @@ def init_auth_db(db_path: Path) -> None:
                 role TEXT NOT NULL DEFAULT 'user',
                 created_at TEXT NOT NULL
             )
-            """
-        )
+            """)
         try:
             cols = conn.execute("PRAGMA table_info(users)").fetchall()
             col_names = {str(row["name"]) for row in cols}
@@ -55,14 +64,13 @@ def init_auth_db(db_path: Path) -> None:
                 conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         except Exception:
             pass
-        conn.commit()
 
 
 def get_user_by_email(db_path: Path, email: str) -> Optional[User]:
     email_norm = (email or "").strip().lower()
     if not email_norm:
         return None
-    with _connect(db_path) as conn:
+    with _managed_connection(db_path) as conn:
         try:
             row = conn.execute(
                 "SELECT id, email, password_hash, role, created_at FROM users WHERE email = ?",
@@ -82,7 +90,7 @@ def get_user_by_email(db_path: Path, email: str) -> Optional[User]:
 
 
 def get_user_by_id(db_path: Path, user_id: int) -> Optional[User]:
-    with _connect(db_path) as conn:
+    with _managed_connection(db_path) as conn:
         try:
             row = conn.execute(
                 "SELECT id, email, password_hash, role, created_at FROM users WHERE id = ?",
@@ -117,12 +125,11 @@ def create_user(db_path: Path, email: str, password: str, role: str = "user") ->
     password_hash = _ph.hash(password)
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    with _connect(db_path) as conn:
+    with _managed_connection(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO users(email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
             (email_norm, password_hash, role_norm, created_at),
         )
-        conn.commit()
         user_id = int(cur.lastrowid)
 
     return User(user_id, email_norm, password_hash, role_norm, created_at)
@@ -145,12 +152,11 @@ def set_user_password(db_path: Path, email: str, password: str) -> Optional[User
         return None
 
     password_hash = _ph.hash(password)
-    with _connect(db_path) as conn:
+    with _managed_connection(db_path) as conn:
         conn.execute(
             "UPDATE users SET password_hash = ? WHERE email = ?",
             (password_hash, email_norm),
         )
-        conn.commit()
     return get_user_by_email(db_path, email_norm)
 
 
@@ -166,12 +172,11 @@ def set_user_role(db_path: Path, email: str, role: str) -> Optional[User]:
     if not existing:
         return None
 
-    with _connect(db_path) as conn:
+    with _managed_connection(db_path) as conn:
         conn.execute(
             "UPDATE users SET role = ? WHERE email = ?",
             (role_norm, email_norm),
         )
-        conn.commit()
     return get_user_by_email(db_path, email_norm)
 
 

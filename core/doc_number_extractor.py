@@ -198,29 +198,44 @@ class DocNumberExtractor:
         """Extrahiert Nummer mit supplier-spezifischen Feldnamen."""
         mapping = self.supplier_mappings.get(supplier_canonical, {})
 
-        # Primäre Felder - mit DocType-Priorisierung
-        primary_fields = mapping.get("doc_number_fields", [])
-
-        # Reorder fields basierend auf doc_type
-        if doc_type:
-            primary_fields = self._reorder_fields_by_doctype(primary_fields, doc_type)
+        primary_fields, secondary_fields = self._resolve_fields_for_doc_type(mapping, doc_type)
 
         result = self._search_fields(text, primary_fields)
         if result.doc_number:
             result.confidence = "high"
             return result
 
-        # Sekundäre Felder (falls vorhanden)
-        secondary_fields = mapping.get("secondary_fields", [])
         if secondary_fields:
-            if doc_type:
-                secondary_fields = self._reorder_fields_by_doctype(secondary_fields, doc_type)
             result = self._search_fields(text, secondary_fields)
             if result.doc_number:
                 result.confidence = "medium"
                 return result
 
         return DocNumberResult(None, None, "none")
+
+    def _resolve_fields_for_doc_type(self, mapping: Dict[str, object], doc_type: Optional[str]) -> Tuple[List[str], List[str]]:
+        """Leitet primäre und sekundäre Felder inklusive DocType-Overrides ab."""
+        primary_fields = list(mapping.get("doc_number_fields", []) or [])
+        secondary_fields = list(mapping.get("secondary_fields", []) or [])
+
+        if doc_type:
+            overrides = mapping.get("doc_type_overrides", {}) or {}
+            doc_type_upper = doc_type.upper()
+            matched_override = None
+            for override_key, override_value in overrides.items():
+                if str(override_key or "").upper() == doc_type_upper:
+                    matched_override = override_value or {}
+                    break
+            if isinstance(matched_override, dict):
+                if isinstance(matched_override.get("primary"), list):
+                    primary_fields = list(matched_override.get("primary") or [])
+                if isinstance(matched_override.get("secondary"), list):
+                    secondary_fields = list(matched_override.get("secondary") or [])
+
+            primary_fields = self._reorder_fields_by_doctype(primary_fields, doc_type)
+            secondary_fields = self._reorder_fields_by_doctype(secondary_fields, doc_type)
+
+        return primary_fields, secondary_fields
 
     def _reorder_fields_by_doctype(self, fields: List[str], doc_type: str) -> List[str]:
         """
@@ -305,14 +320,13 @@ class DocNumberExtractor:
         """
         lines = text.splitlines()
 
-        for field in field_names:
-            field_lower = field.lower()
-
+        for field in sorted(field_names, key=lambda value: len(str(value or "")), reverse=True):
             for idx, line in enumerate(lines):
                 line_lower = line.lower()
+                field_match = self._find_field_match(line, field)
 
                 # Feldname in dieser Zeile?
-                if field_lower not in line_lower:
+                if field_match is None:
                     continue
 
                 # Tabellenkopf-Fall: z.B. "KD-NR.  L-Schein  Datum" und
@@ -326,17 +340,14 @@ class DocNumberExtractor:
                 # WICHTIG: Filtere Datums-Kontext
                 # Wenn "datum" direkt vor/nach dem Feldnamen steht, ignoriere diese Zeile
                 datum_pattern = (
-                    r"datum[:\s-]*" + re.escape(field_lower) + r"|" + re.escape(field_lower) + r"[:\s-]*datum"
+                    r"datum[:\s-]*" + re.escape(field.lower()) + r"|" + re.escape(field.lower()) + r"[:\s-]*datum"
                 )
                 if re.search(datum_pattern, line_lower):
                     continue
 
                 # 1) Gleiche Zeile: suche Wert nach Feldname
-                # Finde Position des Feldnamens
-                pos = line_lower.find(field_lower)
-                if pos >= 0:
-                    # Extrahiere Text nach dem Feldnamen
-                    tail = line[pos + len(field) :]
+                if field_match.end() >= 0:
+                    tail = line[field_match.end() :]
 
                     # Entferne führende Doppelpunkte/Leerzeichen
                     tail = tail.lstrip(": \t")
@@ -352,6 +363,26 @@ class DocNumberExtractor:
                         return DocNumberResult(number, field, "high")
 
         return DocNumberResult(None, None, "none")
+
+    def _find_field_match(self, line: str, field: str) -> Optional[re.Match[str]]:
+        """Findet Feldnamen tolerant gegenüber OCR-bedingten Trenner-Varianten."""
+        if not line or not field:
+            return None
+
+        exact = re.search(re.escape(field), line, flags=re.IGNORECASE)
+        if exact is not None:
+            return exact
+
+        compact_field = re.sub(r"[^a-z0-9]+", "", field.lower())
+        if len(compact_field) < 4:
+            return None
+
+        tokens = [part for part in re.split(r"[^A-Za-z0-9]+", field) if part]
+        if not tokens:
+            return None
+
+        tolerant_pattern = r"\b" + r"[\s\-_/.:#]*".join(re.escape(token) for token in tokens) + r"\b"
+        return re.search(tolerant_pattern, line, flags=re.IGNORECASE)
 
     def _extract_number_from_text(self, text: str) -> Optional[str]:
         """

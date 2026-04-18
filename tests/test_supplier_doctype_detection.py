@@ -74,3 +74,26 @@ Pos 1: Test
 
     dt = classify_doc_type(text, supplier_canonical=supplier)
     assert dt.doc_type == "LIEFERSCHEIN"
+
+
+def test_dekra_report_markers_are_detected_without_explicit_branding():
+    from core.extractor import detect_supplier_detailed
+    from core.doctype_classifier import classify_doc_type
+
+    text = """(6) EZ-Kl. 16 EKR SELBSTF.ARBEITSMASCH.
+EZ 25.04.2022
+Berichts-Nr. F087046002827
+vom 07.04.2026, 09:34
+nächste HU fällig April 2027
+Kennz.: SO-FB1494
+"""
+
+    supplier, conf, source, guess, cands = detect_supplier_detailed(text)
+    assert supplier == "Dekra"
+    assert conf >= 0.80
+    assert source in {"explicit_dekra", "keywords", "db"}
+    assert cands is not None
+
+    dt = classify_doc_type(text, supplier_canonical=supplier)
+    assert dt.doc_type == "PRÜFBERICHT"
+    assert dt.confidence >= 0.80

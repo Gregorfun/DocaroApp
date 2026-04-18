@@ -116,7 +116,10 @@ suppliers:
       - "Lieferschein"
       - "Lieferschein-Nr"
       - "Shipment"
-    doc_type_overrides: {}
+    doc_type_overrides:
+      Lieferschein:
+        primary: ["Lieferschein", "Lieferschein-Nr", "Shipment", "Order ID", "OrderID", "Order-ID"]
+        secondary: ["Auftragsnummer"]
 
   Liebherr:
     doc_number_fields:

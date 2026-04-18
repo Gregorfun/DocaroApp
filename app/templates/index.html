@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content="{{ csrf_token }}" />
-    <title>Docaro OCR-Renamer</title>
+    <title>DocaroApp OCR-Renamer</title>
     <script>
       // Theme sofort setzen um Flash zu verhindern
       (function() {
@@ -16,21 +16,53 @@
     </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
     <script src="{{ url_for('static', filename='theme-toggle.js') }}"></script>
+    <script src="{{ url_for('static', filename='desktop-actions.js') }}" defer></script>
   </head>
   <body data-edit-all="{% if edit_all %}1{% else %}0{% endif %}" data-results-count="{{ results|length if results else 0 }}">
-    <main class="container">
+    <!-- Welle 8: Skip-Link fuer Tastatur-Nutzer -->
+    <a href="#main-content" class="skip-link">Zum Hauptinhalt springen</a>
+    <!-- Welle 7: Globaler Offline-Banner + Toast-Container -->
+    <div id="docaro-offline-banner" class="offline-banner" role="status" hidden>
+      <span class="offline-banner-dot" aria-hidden="true"></span>
+      <span>Keine Verbindung zum Backend. Aktionen werden gesperrt, bis die Verbindung wieder steht.</span>
+    </div>
+    <div id="docaro-toast-container" class="docaro-toast-container" aria-live="polite" aria-atomic="false"></div>
+    <!-- Welle 8: aria-live Status-Region fuer Bulk-Aktionen + Filter-Treffer -->
+    <div id="docaro-aria-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+    <main class="container" id="main-content" tabindex="-1">
       <header>
-        <h1>Docaro OCR-Renamer</h1>
+        <h1>DocaroApp OCR-Renamer <span class="offline-badge" data-offline-badge title="Alle Verarbeitung erfolgt lokal auf diesem Rechner.">100&nbsp;%&nbsp;offline</span></h1>
         <p>PDFs hochladen, OCR auslesen, umbenennen und herunterladen.</p>
         <div class="meta-links">
           <span class="meta-links-right">
             <a href="{{ url_for('suppliers') }}">Lieferanten verwalten</a>
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('pdf_toolkit.toolkit_page') }}">PDF-Toolkit</a>
+            <span aria-hidden="true">·</span>
+            <a href="{{ url_for('quarantine_page') }}">Quarantäne{% if quarantine_count and quarantine_count > 0 %} <span class="badge badge-counter">{{ quarantine_count }}</span>{% endif %}</a>
             <span aria-hidden="true">·</span>
             <a href="{{ url_for('settings_page') }}">Einstellungen</a>
             {% if is_special_admin %}
             <span aria-hidden="true">·</span>
             <a href="{{ url_for('special_admin_page') }}">Admin-Übersicht</a>
             {% endif %}
+            <span aria-hidden="true">·</span>
+            <button type="button" class="link-button" id="help-open-btn" title="Hilfe & Tastenkürzel (?)">Hilfe</button>
+            <span aria-hidden="true" data-desktop-only="1" hidden>·</span>
+            <span class="profile-switcher" id="profile-switcher" data-desktop-only="1" hidden>
+              <button type="button" class="link-button" id="profile-switcher-btn" aria-haspopup="true" aria-expanded="false" title="Profil wechseln">
+                <span aria-hidden="true">👤</span>
+                <span id="profile-switcher-label">Profil</span>
+                <span aria-hidden="true">▾</span>
+              </button>
+              <div class="profile-menu" id="profile-menu" role="menu" hidden>
+                <ul id="profile-menu-list" role="none"></ul>
+                <div class="profile-menu-foot">
+                  <input type="text" id="profile-new-input" placeholder="Neues Profil…" maxlength="40" aria-label="Name für neues Profil" />
+                  <button type="button" class="ghost" id="profile-new-btn">+ Anlegen</button>
+                </div>
+              </div>
+            </span>
             <span aria-hidden="true">·</span>
             <form action="{{ url_for('logout') }}" method="post" style="display:inline">
               <button type="submit" class="ghost" style="padding:0;border:none;background:none;cursor:pointer">Logout</button>
@@ -65,36 +97,52 @@
             {% endfor %}
           {% endif %}
         {% endwith %}
+        <div id="submit-feedback" class="notice submit-feedback" hidden aria-live="polite" aria-atomic="true">
+          <strong><span class="processing-indicator" aria-hidden="true">⟳</span> <span data-role="submit-title">Verarbeitung wird gestartet …</span></strong>
+          <p data-role="submit-detail">Die Dateien werden hochgeladen und direkt an die Pipeline übergeben.</p>
+        </div>
       </header>
 
       <section class="panel">
-        <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
-          <label class="file-input">
-            <span>PDF-Dateien auswählen</span>
-            <input type="file" name="files" accept=".pdf,application/pdf" multiple />
-          </label>
+        <form id="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" data-busy-kind="upload">
+          <div class="drop-zone-upload" id="upload-dropzone" tabindex="0">
+            <label class="file-input">
+              <span>PDF-Dateien auswählen oder hier ablegen</span>
+              <input type="file" name="files" id="upload-file-input" accept=".pdf,application/pdf" multiple />
+            </label>
+            <div class="drop-hint" id="upload-drop-hint">Mehrere PDFs möglich. Drag &amp; Drop unterstützt.</div>
+          </div>
           <label>
             <span>Datumsformat</span>
+            {% set pref_fmt = (user_prefs.last_date_fmt if user_prefs else '') or '%d-%m-%Y' %}
             <select name="date_fmt" data-role="date-format">
-              <option value="%Y-%m-%d">ISO (YYYY-MM-DD)</option>
-              <option value="%d.%m.%Y">Deutsch (DD.MM.YYYY)</option>
-              <option value="%d-%m-%Y" selected>Deutsch mit Bindestrich (DD-MM-YYYY)</option>
-              <option value="%Y%m%d">Kompakt (YYYYMMDD)</option>
+              <option value="%Y-%m-%d" {% if pref_fmt == '%Y-%m-%d' %}selected{% endif %}>ISO (YYYY-MM-DD)</option>
+              <option value="%d.%m.%Y" {% if pref_fmt == '%d.%m.%Y' %}selected{% endif %}>Deutsch (DD.MM.YYYY)</option>
+              <option value="%d-%m-%Y" {% if pref_fmt == '%d-%m-%Y' %}selected{% endif %}>Deutsch mit Bindestrich (DD-MM-YYYY)</option>
+              <option value="%Y%m%d" {% if pref_fmt == '%Y%m%d' %}selected{% endif %}>Kompakt (YYYYMMDD)</option>
             </select>
           </label>
           <label class="checkbox duplicate-upload-option">
             <input type="checkbox" name="include_known" value="1" />
             <span>Bekannte Dateien trotzdem scannen</span>
           </label>
-          <button type="submit">Upload &amp; Verarbeiten</button>
+          <button type="submit" data-busy-label="Upload läuft …">Upload &amp; Verarbeiten</button>
         </form>
 
         {% if inbox_dir_display and (':\\' not in inbox_dir_display) and (':/' not in inbox_dir_display) %}
-          <form action="{{ url_for('process_inbox') }}" method="post" class="inline-form" style="margin-top: 0.75rem;">
+          <form id="inbox-form" action="{{ url_for('process_inbox') }}" method="post" class="inline-form" style="margin-top: 0.75rem;" data-busy-kind="inbox">
             <input type="hidden" name="date_fmt" value="%d-%m-%Y" data-role="batch-date-format" />
-            <button type="submit" class="ghost">Eingang verarbeiten ({{ inbox_dir_display }})</button>
+            <button type="submit" class="ghost" data-busy-label="Eingang wird verarbeitet …">Eingang verarbeiten ({{ inbox_dir_display }})</button>
           </form>
         {% endif %}
+      </section>
+
+      <section class="panel" id="recent-panel" hidden>
+        <div class="recent-header">
+          <h2>Zuletzt verwendet</h2>
+          <button type="button" class="ghost recent-clear" id="recent-clear-btn">Liste leeren</button>
+        </div>
+        <ul class="recent-list" id="recent-list"></ul>
       </section>
 
       <section class="panel">
@@ -118,6 +166,96 @@
         {% elif results|length == 0 %}
           <p class="muted">Keine gültigen PDFs gefunden.</p>
         {% else %}
+          <div class="stats-panel is-loading" id="stats-panel" data-total="{{ results|length }}">
+            <div class="stats-tile"><span class="stats-tile-label">Gesamt</span><span class="stats-tile-value" data-stat="total">{{ results|length }}</span></div>
+            <div class="stats-tile"><span class="stats-tile-label">Heute</span><span class="stats-tile-value skeleton-text" data-stat="today">–</span></div>
+            <div class="stats-tile"><span class="stats-tile-label">Unvollständig</span><span class="stats-tile-value skeleton-text" data-stat="incomplete">–</span></div>
+            <div class="stats-tile"><span class="stats-tile-label">In Bearbeitung</span><span class="stats-tile-value skeleton-text" data-stat="in_review">–</span></div>
+            <div class="stats-tile"><span class="stats-tile-label">Quarantäne</span><span class="stats-tile-value skeleton-text" data-stat="quarantined">–</span></div>
+            <div class="stats-tile stats-tile-wide">
+              <span class="stats-tile-label">Top-Lieferanten</span>
+              <span class="stats-tile-list skeleton-block" data-stat="top_suppliers">–</span>
+            </div>
+            <div class="stats-tile stats-tile-wide">
+              <span class="stats-tile-label">Doctype-Verteilung</span>
+              <span class="stats-tile-list skeleton-block" data-stat="by_doctype">–</span>
+            </div>
+          </div>
+          <div class="results-toolbar" id="results-toolbar">
+            <div class="results-toolbar-row">
+              <input type="search" id="results-search" class="results-search" placeholder="Suchen (Datei, Lieferant, Nr.) — Tastenkürzel: /" aria-label="Ergebnisse durchsuchen" />
+              <select id="results-filter-status" class="results-filter" aria-label="Status-Filter">
+                <option value="">Alle Status</option>
+                <option value="unvollstaendig">unvollständig</option>
+                <option value="in_bearbeitung">in Bearbeitung</option>
+                <option value="fertig">fertig</option>
+              </select>
+              <select id="results-filter-doctype" class="results-filter" aria-label="Doctype-Filter">
+                <option value="">Alle Typen</option>
+                <option value="RECHNUNG">Rechnung</option>
+                <option value="LIEFERSCHEIN">Lieferschein</option>
+                <option value="ÜBERNAHMESCHEIN">Übernahmeschein</option>
+                <option value="KOMMISSIONIERLISTE">Kommissionierliste</option>
+                <option value="PRÜFBERICHT">Prüfbericht</option>
+                <option value="SONSTIGES">Sonstiges</option>
+              </select>
+              <span class="results-count" id="results-count" aria-live="polite">{{ results|length }} / {{ results|length }}</span>
+              <button type="button" class="ghost" id="export-csv-btn" title="Sichtbare Ergebnisse als CSV exportieren">CSV-Export</button>
+              <button type="button" class="ghost" id="print-results-btn" title="Druckansicht der Ergebnisliste">Drucken</button>
+            </div>
+            <div class="results-toolbar-row results-toolbar-row--w12">
+              <select id="results-sort" class="results-filter" aria-label="Sortierung">
+                <option value="">Sortierung: Standard</option>
+                <option value="file_asc">Datei A-Z</option>
+                <option value="supplier_asc">Lieferant A-Z</option>
+                <option value="date_desc">Datum (neu zuerst)</option>
+                <option value="date_asc">Datum (alt zuerst)</option>
+              </select>
+              <label class="results-daterange">
+                <span>von</span>
+                <input type="date" id="results-date-from" aria-label="Datum von" />
+              </label>
+              <label class="results-daterange">
+                <span>bis</span>
+                <input type="date" id="results-date-to" aria-label="Datum bis" />
+              </label>
+              <button type="button" class="ghost" id="results-daterange-clear" title="Datumsbereich zuruecksetzen">↺</button>
+            </div>
+            <div class="results-toolbar-row results-toolbar-row--w13b">
+              <label class="results-savedsearch">
+                <span>Gespeicherte Suchen</span>
+                <select id="saved-searches-select" class="results-filter" aria-label="Gespeicherte Suchen">
+                  <option value="">– waehlen –</option>
+                </select>
+              </label>
+              <button type="button" class="ghost" id="saved-search-save" title="Aktuelle Filter speichern">Speichern</button>
+              <button type="button" class="ghost" id="saved-search-delete" title="Gewaehlte Suche loeschen" disabled>Loeschen</button>
+              <button type="button" class="ghost" id="open-trash-btn" title="Papierkorb anzeigen">Papierkorb</button>
+            </div>
+            <div class="results-toolbar-row results-bulk-bar" id="results-bulk-bar" hidden>
+              <label class="checkbox">
+                <input type="checkbox" id="bulk-select-all" />
+                <span>Alle auf der Seite</span>
+              </label>
+              <span class="bulk-counter" id="bulk-counter">0 ausgewählt</span>
+              <button type="button" class="ghost" data-bulk-action="set_status" data-bulk-value="fertig">Auf "fertig" setzen</button>
+              <button type="button" class="ghost" data-bulk-action="set_status" data-bulk-value="in_bearbeitung">In Bearbeitung</button>
+              <select class="results-filter" id="bulk-doctype-select" aria-label="Bulk-Doctype">
+                <option value="">Doctype …</option>
+                <option value="RECHNUNG">Rechnung</option>
+                <option value="LIEFERSCHEIN">Lieferschein</option>
+                <option value="ÜBERNAHMESCHEIN">Übernahmeschein</option>
+                <option value="KOMMISSIONIERLISTE">Kommissionierliste</option>
+                <option value="PRÜFBERICHT">Prüfbericht</option>
+                <option value="SONSTIGES">Sonstiges</option>
+              </select>
+              <button type="button" class="ghost" id="bulk-doctype-apply">Doctype setzen</button>
+              <button type="button" class="action-button danger" data-bulk-action="delete">Löschen</button>
+            </div>
+          </div>
+          <div class="results-empty" id="results-empty" hidden>
+            <p class="muted">Keine Ergebnisse passen zu Suche/Filter. <button type="button" class="link-button" id="results-empty-reset">Filter zurücksetzen</button></p>
+          </div>
           <div class="results-cards">
             {% for item in results %}
               {% set conf = item.supplier_confidence|float if item.supplier_confidence else 0 %}
@@ -133,7 +271,10 @@
                 {% set row_state = "fertig" %}
               {% endif %}
 
-              <div class="result-card">
+              <div class="result-card" data-file-id="{{ item.file_id or '' }}" data-supplier="{{ (item.supplier or '')|lower }}" data-out-name="{{ (item.out_name or '')|lower }}" data-doc-number="{{ (item.doc_number or '')|lower }}" data-doc-type="{{ item.doc_type or '' }}" data-status="{{ row_state }}">
+                <label class="bulk-select-label" title="Für Bulk-Aktion auswählen">
+                  <input type="checkbox" class="bulk-select-checkbox" data-bulk-id="{{ item.file_id or '' }}" {% if not item.file_id %}disabled{% endif %} />
+                </label>
                 <div class="result-content">
                   <div class="result-row">
                     <div class="result-info-field">
@@ -154,6 +295,11 @@
                     <div class="result-info-field">
                       <span class="field-label-inline">Lieferant:</span>
                       <span class="field-value" data-field="supplier" title="{{ item.supplier or '-' }}">{{ item.supplier or '-' }}</span>
+                      {% if item.supplier and item.supplier_confidence %}
+                        <span class="conf-badge {% if conf >= 0.85 %}conf-high{% elif conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}" title="Konfidenz: {{ '%.0f'|format(conf * 100) }}%">
+                          {{ "%.0f"|format(conf * 100) }}%
+                        </span>
+                      {% endif %}
                     </div>
                     <div class="result-action-field">
                       <details class="action-details" data-doc-id="{{ item.file_id or '' }}" data-edit-kind="supplier" {% if show_supplier_edit %}open{% endif %}>
@@ -164,6 +310,14 @@
                           <input type="hidden" name="file_id" value="{{ item.file_id or '' }}" />
                           <input type="hidden" name="date_fmt" value="%d-%m-%Y" />
                           <input type="hidden" name="supplier_guess_line" value="{{ item.supplier_guess_line or '' }}" />
+                          {% if user_prefs and user_prefs.recent_suppliers %}
+                            <div class="quick-picks" aria-label="Zuletzt verwendete Lieferanten">
+                              <span class="quick-picks-label">Schnellauswahl:</span>
+                              {% for sup in user_prefs.recent_suppliers[:5] %}
+                                <button type="button" class="quick-pick" data-quick-pick-value="{{ sup }}">{{ sup }}</button>
+                              {% endfor %}
+                            </div>
+                          {% endif %}
                           {% if item.supplier_guess_line and not is_gibberish %}
                             <label class="checkbox">
                               <input type="checkbox" name="use_alias" value="1" checked />
@@ -182,6 +336,12 @@
                     <div class="result-info-field">
                       <span class="field-label-inline">Datum:</span>
                       <span class="field-value" data-field="date" data-iso-date="{{ item.date or '' }}" title="{{ item.date or '-' }}">{{ item.date or '-' }}</span>
+                      {% set date_conf = item.date_confidence|float if item.date_confidence else 0 %}
+                      {% if item.date and item.date_confidence %}
+                        <span class="conf-badge {% if date_conf >= 0.85 %}conf-high{% elif date_conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}" title="Konfidenz: {{ '%.0f'|format(date_conf * 100) }}%">
+                          {{ "%.0f"|format(date_conf * 100) }}%
+                        </span>
+                      {% endif %}
                     </div>
                     <div class="result-action-field">
                       <details class="action-details action-date-details {% if not item.date_missing %}is-compact{% endif %}" data-doc-id="{{ item.file_id or '' }}" data-edit-kind="date" {% if show_date_edit %}open{% endif %}>
@@ -234,6 +394,11 @@
                                 title="Confidence: {{ '%.2f'|format(doc_conf) }}{% if item.doc_type_evidence %}, Keywords: {{ item.doc_type_evidence }}{% endif %}">
                             {{ item.doc_type }}
                           </span>
+                          {% if item.doc_type_confidence %}
+                            <span class="conf-badge {% if doc_conf >= 0.85 %}conf-high{% elif doc_conf >= 0.60 %}conf-mid{% else %}conf-low{% endif %}" title="Konfidenz: {{ '%.0f'|format(doc_conf * 100) }}%">
+                              {{ "%.0f"|format(doc_conf * 100) }}%
+                            </span>
+                          {% endif %}
                         {% else %}
                           <span class="muted">-</span>
                         {% endif %}
@@ -482,6 +647,58 @@
 
         const dateSelect = document.querySelector('select[data-role="date-format"]');
         const batchDateInput = document.querySelector('input[data-role="batch-date-format"]');
+        const submitFeedback = document.getElementById("submit-feedback");
+        const submitFeedbackTitle = submitFeedback?.querySelector('[data-role="submit-title"]');
+        const submitFeedbackDetail = submitFeedback?.querySelector('[data-role="submit-detail"]');
+        const uploadForm = document.getElementById("upload-form");
+        const inboxForm = document.getElementById("inbox-form");
+        const setBusyState = (form, title, detail) => {
+          if (!form) {
+            return;
+          }
+          document.body.classList.add("is-submitting");
+          if (submitFeedback) {
+            submitFeedback.hidden = false;
+          }
+          if (submitFeedbackTitle) {
+            submitFeedbackTitle.textContent = title;
+          }
+          if (submitFeedbackDetail) {
+            submitFeedbackDetail.textContent = detail;
+          }
+          form.querySelectorAll('button[type="submit"]').forEach((button) => {
+            if (!button.dataset.originalLabel) {
+              button.dataset.originalLabel = button.textContent || "";
+            }
+            if (button.dataset.busyLabel) {
+              button.textContent = button.dataset.busyLabel;
+            }
+            button.disabled = true;
+            button.setAttribute("aria-busy", "true");
+          });
+        };
+
+        if (uploadForm) {
+          uploadForm.addEventListener("submit", () => {
+            const fileInput = uploadForm.querySelector('input[type="file"][name="files"]');
+            const fileCount = fileInput?.files?.length || 0;
+            const detail = fileCount > 0
+              ? `${fileCount} PDF${fileCount === 1 ? "" : "s"} werden hochgeladen und vorbereitet.`
+              : "Die Auswahl wird hochgeladen und verarbeitet.";
+            setBusyState(uploadForm, "Upload wurde gestartet …", detail);
+          });
+        }
+
+        if (inboxForm) {
+          inboxForm.addEventListener("submit", () => {
+            setBusyState(
+              inboxForm,
+              "Eingang wird verarbeitet …",
+              "Die Dateien aus dem Eingang werden jetzt an die Pipeline übergeben."
+            );
+          });
+        }
+
         if (dateSelect) {
           const STORAGE_KEY = "docaro:date_fmt";
           const allowed = Array.from(dateSelect.options || []).map((o) => o.value);
@@ -748,6 +965,1656 @@
           });
         });
       })();
+    </script>
+
+    <script>
+    (function () {
+      // -- Drag & Drop am Upload-Formular --
+      const dropZone = document.getElementById('upload-dropzone');
+      const fileInput = document.getElementById('upload-file-input');
+      const dropHint = document.getElementById('upload-drop-hint');
+      if (dropZone && fileInput) {
+        ['dragenter', 'dragover'].forEach((evt) => {
+          dropZone.addEventListener(evt, (e) => {
+            e.preventDefault(); e.stopPropagation();
+            dropZone.classList.add('dragover');
+          });
+        });
+        ['dragleave', 'drop'].forEach((evt) => {
+          dropZone.addEventListener(evt, (e) => {
+            e.preventDefault(); e.stopPropagation();
+            dropZone.classList.remove('dragover');
+          });
+        });
+        dropZone.addEventListener('drop', (e) => {
+          const files = Array.from(e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : [])
+            .filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+          if (!files.length) return;
+          const dt = new DataTransfer();
+          files.forEach((f) => dt.items.add(f));
+          fileInput.files = dt.files;
+          if (dropHint) {
+            dropHint.textContent = files.length + ' Datei(en) bereit zum Upload.';
+          }
+        });
+        fileInput.addEventListener('change', () => {
+          if (dropHint && fileInput.files && fileInput.files.length) {
+            dropHint.textContent = fileInput.files.length + ' Datei(en) ausgewählt.';
+          }
+        });
+      }
+
+      // -- Recent Files Panel --
+      const panel = document.getElementById('recent-panel');
+      const list = document.getElementById('recent-list');
+      const clearBtn = document.getElementById('recent-clear-btn');
+      if (panel && list && window.DocaroDesktop) {
+        const KIND_LABEL = {
+          merge: 'Zusammenfügen',
+          split: 'Teilen',
+          compress: 'Komprimieren',
+          ocr: 'OCR',
+          upload: 'Upload',
+          autosort: 'Auto-Sort',
+        };
+
+        function fmtTime(ts) {
+          if (!ts) return '';
+          const d = new Date(ts * 1000);
+          return d.toLocaleString();
+        }
+
+        async function render() {
+          const items = await window.DocaroDesktop.loadRecent();
+          if (!items.length) { panel.hidden = true; return; }
+          panel.hidden = false;
+          list.innerHTML = '';
+          items.forEach((it) => {
+            const li = document.createElement('li');
+            li.className = 'recent-item';
+            const label = KIND_LABEL[it.kind] || it.kind;
+            const meta = it.savings_pct !== undefined ? ` · ${it.savings_pct}% kleiner` :
+                         it.parts !== undefined ? ` · ${it.parts} Teile` :
+                         it.lang ? ` · ${it.lang}` : '';
+            li.innerHTML = `
+              <div class="recent-info">
+                <strong>${escapeHtml(it.filename)}</strong>
+                <small>${escapeHtml(label)}${escapeHtml(meta)} · ${escapeHtml(fmtTime(it.ts))}</small>
+              </div>
+              <div class="recent-actions"></div>
+            `;
+            const actions = li.querySelector('.recent-actions');
+            if (it.download_token) {
+              const dl = document.createElement('a');
+              dl.href = '/pdf-toolkit/download/' + it.download_token;
+              dl.textContent = 'Erneut laden';
+              dl.className = 'action-link-compact';
+              actions.appendChild(dl);
+            }
+            if (it.path) {
+              const rev = document.createElement('button');
+              rev.type = 'button';
+              rev.className = 'action-link-compact';
+              rev.textContent = 'Im Explorer zeigen';
+              rev.setAttribute('data-reveal-path', it.path);
+              rev.setAttribute('data-desktop-only', '');
+              rev.hidden = document.body.dataset.desktopMode !== '1';
+              actions.appendChild(rev);
+            }
+            list.appendChild(li);
+          });
+        }
+
+        function escapeHtml(s) {
+          return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        if (clearBtn) {
+          clearBtn.addEventListener('click', async () => {
+            await window.DocaroDesktop.clearRecent();
+            render();
+          });
+        }
+        render();
+      }
+
+      // -- Smart Defaults: Quick-Pick Lieferanten --
+      document.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-quick-pick-value]');
+        if (!btn) return;
+        const value = btn.getAttribute('data-quick-pick-value') || '';
+        const form = btn.closest('form');
+        const input = form ? form.querySelector('input[name="supplier_input"]') : null;
+        if (input) {
+          input.value = value;
+          input.focus();
+        }
+      });
+
+      // -- Smart Defaults: Datumsformat in localStorage spiegeln & beim Wechsel persistieren --
+      const dateFmtSelects = document.querySelectorAll('select[name="date_fmt"][data-role="date-format"]');
+      dateFmtSelects.forEach((sel) => {
+        sel.addEventListener('change', () => {
+          try { localStorage.setItem('docaro:date_fmt', sel.value); } catch (_) {}
+          if (window.DocaroDesktop && typeof window.DocaroDesktop.savePref === 'function') {
+            window.DocaroDesktop.savePref({ last_date_fmt: sel.value });
+          }
+        });
+      });
+    })();
+    </script>
+
+    <script>
+    // Welle 3: Filter, Bulk-Aktionen, Tastaturkuerzel
+    (function () {
+      const cards = Array.from(document.querySelectorAll('.result-card'));
+      if (!cards.length) return;
+
+      const searchInput = document.getElementById('results-search');
+      const statusFilter = document.getElementById('results-filter-status');
+      const doctypeFilter = document.getElementById('results-filter-doctype');
+      const countEl = document.getElementById('results-count');
+      const bulkBar = document.getElementById('results-bulk-bar');
+      const bulkCounter = document.getElementById('bulk-counter');
+      const bulkSelectAll = document.getElementById('bulk-select-all');
+      const bulkDoctypeSelect = document.getElementById('bulk-doctype-select');
+      const bulkDoctypeApply = document.getElementById('bulk-doctype-apply');
+      const total = cards.length;
+
+      const emptyEl = document.getElementById('results-empty');
+      function applyFilter() {
+        const q = (searchInput && searchInput.value || '').trim().toLowerCase();
+        const st = statusFilter && statusFilter.value || '';
+        const dt = doctypeFilter && doctypeFilter.value || '';
+        let visible = 0;
+        cards.forEach(function (card) {
+          const sup = card.dataset.supplier || '';
+          const out = card.dataset.outName || '';
+          const dn = card.dataset.docNumber || '';
+          const cs = card.dataset.status || '';
+          const cd = card.dataset.docType || '';
+          const matchQ = !q || sup.indexOf(q) >= 0 || out.indexOf(q) >= 0 || dn.indexOf(q) >= 0;
+          const matchS = !st || cs === st;
+          const matchD = !dt || cd === dt;
+          const show = matchQ && matchS && matchD;
+          card.hidden = !show;
+          if (show) visible += 1;
+        });
+        if (countEl) countEl.textContent = visible + ' / ' + total;
+        // Welle 7: Empty-State zeigen, wenn Filter alle Karten ausblendet
+        if (emptyEl) {
+          const hasAnyFilter = !!(q || st || dt);
+          emptyEl.hidden = !(hasAnyFilter && visible === 0 && total > 0);
+        }
+      }
+
+      [searchInput, statusFilter, doctypeFilter].forEach(function (el) {
+        if (el) el.addEventListener('input', applyFilter);
+        if (el) el.addEventListener('change', applyFilter);
+      });
+      const emptyResetBtn = document.getElementById('results-empty-reset');
+      if (emptyResetBtn) {
+        emptyResetBtn.addEventListener('click', function () {
+          if (searchInput) searchInput.value = '';
+          if (statusFilter) statusFilter.value = '';
+          if (doctypeFilter) doctypeFilter.value = '';
+          applyFilter();
+          if (searchInput) searchInput.focus();
+        });
+      }
+
+      // Bulk selection
+      function getSelectedIds() {
+        return Array.from(document.querySelectorAll('.bulk-select-checkbox:checked'))
+          .map(function (cb) { return cb.dataset.bulkId; })
+          .filter(Boolean);
+      }
+      function refreshBulkBar() {
+        const ids = getSelectedIds();
+        if (bulkCounter) bulkCounter.textContent = ids.length + ' ausgewählt';
+        if (bulkBar) bulkBar.hidden = ids.length === 0;
+      }
+      document.addEventListener('change', function (ev) {
+        const t = ev.target;
+        if (t && t.classList && t.classList.contains('bulk-select-checkbox')) {
+          refreshBulkBar();
+        }
+      });
+      if (bulkSelectAll) {
+        bulkSelectAll.addEventListener('change', function () {
+          const checked = bulkSelectAll.checked;
+          cards.forEach(function (card) {
+            if (card.hidden) return;
+            const cb = card.querySelector('.bulk-select-checkbox');
+            if (cb && !cb.disabled) cb.checked = checked;
+          });
+          refreshBulkBar();
+        });
+      }
+
+      function getCsrfToken() {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.content : '';
+      }
+      function callBulk(action, value) {
+        const ids = getSelectedIds();
+        if (!ids.length) return;
+        const body = JSON.stringify({ action: action, file_ids: ids, value: value || '' });
+        return fetch('/bulk_action', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': getCsrfToken(),
+            'X-Requested-With': 'fetch',
+            'Accept': 'application/json',
+          },
+          body: body,
+        }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); });
+      }
+      function notify(msg, opts) {
+        // Welle 7: UI-Toast + (im Desktop) optional OS-Notification
+        const o = opts || {};
+        if (window.docaroToast) {
+          window.docaroToast(msg, { type: o.type || 'info', timeout: o.timeout });
+        }
+        // Welle 8: a11y-Ansage in aria-live Region
+        const live = document.getElementById('docaro-aria-live');
+        if (live) {
+          live.textContent = '';
+          setTimeout(function () { live.textContent = String(msg || ''); }, 30);
+        }
+        if (o.type === 'error' || o.type === 'success') {
+          if (window.DocaroDesktop && window.DocaroDesktop.notify) {
+            try { window.DocaroDesktop.notify(msg, o); } catch (_) {}
+          }
+        }
+      }
+
+      function statusPillFor(state) {
+        if (state === 'unvollstaendig') return { cls: 'status-pill status-unvollstaendig', text: 'unvollständig' };
+        if (state === 'in_bearbeitung') return { cls: 'status-pill status-in_bearbeitung', text: 'in Bearbeitung' };
+        if (state === 'fertig') return { cls: 'status-pill status-fertig', text: 'fertig' };
+        return null;
+      }
+      function applyOptimistic(ids, action, value) {
+        // Liefert eine Liste von Undo-Funktionen (zum Rollback bei Fehler).
+        const undos = [];
+        ids.forEach(function (fid) {
+          const card = document.querySelector('.result-card[data-file-id="' + fid + '"]');
+          if (!card) return;
+          if (action === 'set_status') {
+            const prevStatus = card.getAttribute('data-status');
+            const pill = card.querySelector('.field-value[data-field="review_state"] .status-pill');
+            const prevPillCls = pill ? pill.className : null;
+            const prevPillText = pill ? pill.textContent : null;
+            card.setAttribute('data-status', value);
+            const next = statusPillFor(value);
+            if (pill && next) {
+              pill.className = next.cls;
+              pill.textContent = next.text;
+            }
+            undos.push(function () {
+              if (prevStatus !== null) card.setAttribute('data-status', prevStatus);
+              if (pill && prevPillCls !== null) {
+                pill.className = prevPillCls;
+                pill.textContent = prevPillText;
+              }
+            });
+          } else if (action === 'set_doc_type') {
+            const prevDocType = card.getAttribute('data-doc-type');
+            const cell = card.querySelector('[data-field="doc_type"]');
+            const prevHtml = cell ? cell.innerHTML : null;
+            card.setAttribute('data-doc-type', value);
+            if (cell) {
+              const cls = String(value || '').toLowerCase();
+              cell.innerHTML = '<span class="badge badge-' + cls + '">' + String(value).replace(/[<>&]/g, '') + '</span>';
+            }
+            undos.push(function () {
+              if (prevDocType !== null) card.setAttribute('data-doc-type', prevDocType);
+              if (cell && prevHtml !== null) cell.innerHTML = prevHtml;
+            });
+          }
+        });
+        return function rollback() { undos.forEach(function (fn) { try { fn(); } catch (_) {} }); };
+      }
+
+      document.querySelectorAll('[data-bulk-action]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const action = btn.dataset.bulkAction;
+          const value = btn.dataset.bulkValue || '';
+          const ids = getSelectedIds();
+          if (!ids.length) return;
+          if (action === 'delete' && !confirm(ids.length + ' Datei(en) wirklich löschen?')) return;
+          btn.disabled = true;
+          let rollback = null;
+          if (action === 'set_status' || action === 'set_doc_type') {
+            rollback = applyOptimistic(ids, action, value);
+          }
+          callBulk(action, value).then(function (res) {
+            btn.disabled = false;
+            if (res && res.ok && res.body && res.body.ok) {
+              notify(res.body.message || 'OK', { type: 'success' });
+              if (action === 'delete') {
+                ids.forEach(function (fid) {
+                  const c = document.querySelector('.result-card[data-file-id="' + fid + '"]');
+                  if (c) c.remove();
+                });
+                refreshBulkBar();
+                applyFilter();
+              } else {
+                // Optimistic-Update bleibt bestehen, kein Reload mehr.
+                refreshBulkBar();
+                applyFilter();
+              }
+            } else {
+              if (rollback) rollback();
+              notify((res && res.body && res.body.message) || 'Fehler bei Bulk-Aktion', { type: 'error' });
+            }
+          }).catch(function () {
+            btn.disabled = false;
+            if (rollback) rollback();
+            notify('Netzwerkfehler bei Bulk-Aktion', { type: 'error' });
+          });
+        });
+      });
+      if (bulkDoctypeApply) {
+        bulkDoctypeApply.addEventListener('click', function () {
+          const v = bulkDoctypeSelect && bulkDoctypeSelect.value || '';
+          if (!v) { notify('Bitte Doctype wählen.', { type: 'warning' }); return; }
+          const ids = getSelectedIds();
+          if (!ids.length) return;
+          bulkDoctypeApply.disabled = true;
+          const rollback = applyOptimistic(ids, 'set_doc_type', v);
+          callBulk('set_doc_type', v).then(function (res) {
+            bulkDoctypeApply.disabled = false;
+            if (res && res.ok && res.body && res.body.ok) {
+              notify(res.body.message || 'OK', { type: 'success' });
+              refreshBulkBar();
+              applyFilter();
+            } else {
+              rollback();
+              notify((res && res.body && res.body.message) || 'Fehler', { type: 'error' });
+            }
+          }).catch(function () {
+            bulkDoctypeApply.disabled = false;
+            rollback();
+            notify('Netzwerkfehler', { type: 'error' });
+          });
+        });
+      }
+
+      // Tastaturkuerzel
+      document.addEventListener('keydown', function (ev) {
+        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+        const inField = tag === 'input' || tag === 'textarea' || tag === 'select' || (ev.target && ev.target.isContentEditable);
+        // "/" fokussiert Suche
+        if (ev.key === '/' && !inField && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+          if (searchInput) {
+            ev.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+          }
+          return;
+        }
+        // Strg+F fokussiert Suche
+        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'f' || ev.key === 'F')) {
+          if (searchInput) {
+            ev.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+          }
+          return;
+        }
+        // Esc: Suche/Filter leeren ODER offene <details> schliessen
+        if (ev.key === 'Escape') {
+          if (inField && tag === 'input' && ev.target.id === 'results-search') {
+            ev.target.value = '';
+            applyFilter();
+            ev.target.blur();
+            return;
+          }
+          if (!inField) {
+            const open = document.querySelectorAll('.action-details[open]');
+            if (open.length) {
+              open.forEach(function (d) { d.removeAttribute('open'); });
+              ev.preventDefault();
+            }
+          }
+        }
+        // Strg+A im Suchfeld nicht, sonst toggle alle (sichtbar)
+        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'a' || ev.key === 'A') && !inField) {
+          if (bulkSelectAll) {
+            ev.preventDefault();
+            bulkSelectAll.checked = !bulkSelectAll.checked;
+            bulkSelectAll.dispatchEvent(new Event('change'));
+          }
+        }
+      });
+
+      applyFilter();
+
+      // CSV-Export der sichtbaren Ergebnisse
+      const exportBtn = document.getElementById('export-csv-btn');
+      if (exportBtn) {
+        exportBtn.addEventListener('click', function () {
+          const visible = cards.filter(function (c) { return !c.hidden; });
+          const ids = visible.map(function (c) { return c.dataset.fileId; }).filter(Boolean);
+          let url = '/api/results.csv';
+          // Wenn gefiltert: nur sichtbare exportieren
+          if (visible.length < cards.length && ids.length) {
+            url += '?file_ids=' + encodeURIComponent(ids.join(','));
+          }
+          window.location.href = url;
+        });
+      }
+
+      // Druckansicht
+      const printBtn = document.getElementById('print-results-btn');
+      if (printBtn) {
+        printBtn.addEventListener('click', function () {
+          window.print();
+        });
+      }
+
+      // Statistik-Panel laden (mit Welle-7 Auto-Retry: 3 Versuche, exponentielles Backoff)
+      const statsPanel = document.getElementById('stats-panel');
+      if (statsPanel) {
+        function clearSkeleton() {
+          statsPanel.classList.remove('is-loading');
+          statsPanel.querySelectorAll('.skeleton-text, .skeleton-block').forEach(function (el) {
+            el.classList.remove('skeleton-text');
+            el.classList.remove('skeleton-block');
+          });
+        }
+        function fetchStatsOnce() {
+          return fetch('/api/results_summary', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+          }).then(function (r) {
+            if (!r.ok) throw new Error('http ' + r.status);
+            return r.json();
+          });
+        }
+        function fetchStatsWithRetry(attempt) {
+          return fetchStatsOnce().catch(function (err) {
+            if (attempt >= 3) throw err;
+            const delayMs = Math.round(500 * Math.pow(3, attempt - 1)); // 500, 1500, 4500
+            return new Promise(function (resolve) { setTimeout(resolve, delayMs); })
+              .then(function () { return fetchStatsWithRetry(attempt + 1); });
+          });
+        }
+        fetchStatsWithRetry(1).then(function (data) {
+          if (!data || !data.ok) { clearSkeleton(); return; }
+          function setStat(key, value) {
+            const el = statsPanel.querySelector('[data-stat="' + key + '"]');
+            if (el) el.textContent = value;
+          }
+          setStat('total', data.total);
+          setStat('today', data.today);
+          setStat('incomplete', data.incomplete);
+          setStat('in_review', data.in_review);
+          setStat('quarantined', data.quarantined);
+          const topEl = statsPanel.querySelector('[data-stat="top_suppliers"]');
+          if (topEl) {
+            if (data.top_suppliers && data.top_suppliers.length) {
+              topEl.innerHTML = data.top_suppliers.map(function (s) {
+                return '<span class="stats-chip">' + s.supplier.replace(/[<>&]/g, '') + ' <strong>' + s.count + '</strong></span>';
+              }).join(' ');
+            } else {
+              topEl.textContent = '–';
+            }
+          }
+          const dtEl = statsPanel.querySelector('[data-stat="by_doctype"]');
+          if (dtEl) {
+            const entries = Object.entries(data.by_doctype || {}).sort(function (a, b) { return b[1] - a[1]; });
+            if (entries.length) {
+              dtEl.innerHTML = entries.map(function (kv) {
+                return '<span class="stats-chip">' + String(kv[0]).replace(/[<>&]/g, '') + ' <strong>' + kv[1] + '</strong></span>';
+              }).join(' ');
+            } else {
+              dtEl.textContent = '–';
+            }
+          }
+          clearSkeleton();
+        }).catch(function () {
+          clearSkeleton();
+          if (window.docaroToast) {
+            window.docaroToast('Statistik konnte nach 3 Versuchen nicht geladen werden.', { type: 'warning', timeout: 6000 });
+          }
+        });
+      }
+    })();
+    </script>
+
+    <!-- Welle 5: Hilfe-Overlay + First-Run-Tour -->
+    <div class="help-overlay" id="help-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title" hidden>
+      <div class="help-overlay-backdrop" data-help-close="1"></div>
+      <div class="help-overlay-card">
+        <div class="help-overlay-head">
+          <h2 id="help-title">Hilfe &amp; Tastenkürzel</h2>
+          <button type="button" class="help-overlay-close" data-help-close="1" aria-label="Schließen">×</button>
+        </div>
+        <div class="help-overlay-body">
+          <section>
+            <h3>Tastenkürzel</h3>
+            <table class="help-keys">
+              <tbody>
+                <tr><th><kbd>?</kbd></th><td>Diese Hilfe öffnen / schließen</td></tr>
+                <tr><th><kbd>/</kbd> · <kbd>Strg</kbd>+<kbd>F</kbd></th><td>Suche fokussieren</td></tr>
+                <tr><th><kbd>Esc</kbd></th><td>Suche leeren · offene Bearbeitung schließen · Overlay schließen</td></tr>
+                <tr><th><kbd>Strg</kbd>+<kbd>A</kbd></th><td>Alle sichtbaren Karten markieren / abwählen</td></tr>
+                <tr><th><kbd>Enter</kbd></th><td>In einem Bearbeitungs-Feld: speichern</td></tr>
+              </tbody>
+            </table>
+          </section>
+          <section>
+            <h3>Workflow in 3 Schritten</h3>
+            <ol class="help-steps">
+              <li><strong>Hochladen oder Eingang verarbeiten</strong> – PDFs werden lokal mit OCR ausgelesen.</li>
+              <li><strong>Prüfen &amp; korrigieren</strong> – Lieferant, Datum, Doctype direkt in der Karte editieren. Niedrige Konfidenz ist farbig markiert.</li>
+              <li><strong>Exportieren</strong> – Per CSV-Export oder ZIP-Download. Mehrfachauswahl + Bulk-Aktionen für viele Dateien.</li>
+            </ol>
+          </section>
+          <section>
+            <h3>Mehr</h3>
+            <ul class="help-links">
+              <li>Aktionen auf mehrere Dateien: Karten ankreuzen → Bulk-Bar erscheint.</li>
+              <li>Zurücksetzen: <em>Letzte Änderung rückgängig</em> oder <em>Reset</em> in den Einstellungen.</li>
+              <li>Quarantäne: Verdächtige PDFs landen separat und können nach Sichtung freigegeben werden.</li>
+            </ul>
+          </section>
+          <section class="help-section" id="help-backup-section" data-desktop-only="1" hidden>
+            <h3>Datensicherung &amp; Migration</h3>
+            <p class="help-section-hint">Sichert deine persönlichen Einstellungen (Smart Defaults, Recent-Files). Snapshots bleiben lokal, max. 10 Stück pro Konto.</p>
+            <div class="backup-actions">
+              <button type="button" class="action-button" id="backup-create-btn">Snapshot jetzt erstellen</button>
+              <a href="/api/desktop/backup/export.zip" class="ghost" id="backup-export-link" download>Export als ZIP…</a>
+              <label class="ghost backup-import-label" for="backup-import-input">Import aus ZIP…</label>
+              <input type="file" id="backup-import-input" accept=".zip,application/zip" hidden>
+            </div>
+            <ul class="backup-list" id="backup-list" aria-live="polite"></ul>
+          </section>
+          <section class="help-section" id="help-settings-section" data-desktop-only="1" hidden>
+            <h3>Einstellungen</h3>
+            <p class="help-section-hint">Visueller Editor für deine persönlichen Vorgaben. Änderungen werden sofort gespeichert.</p>
+            <div class="settings-grid">
+              <label class="settings-row">
+                <span>Datumsformat</span>
+                <select id="settings-date-fmt">
+                  <option value="%d-%m-%Y">31-12-2026 (TT-MM-JJJJ)</option>
+                  <option value="%d.%m.%Y">31.12.2026 (TT.MM.JJJJ)</option>
+                  <option value="%Y-%m-%d">2026-12-31 (ISO)</option>
+                  <option value="%Y%m%d">20261231 (kompakt)</option>
+                </select>
+              </label>
+              <label class="settings-row">
+                <span>Standard-Dokumenttyp</span>
+                <input type="text" id="settings-doctype" maxlength="40" placeholder="z. B. Rechnung" />
+              </label>
+              <fieldset class="settings-row settings-fieldset">
+                <legend>Erscheinungsbild</legend>
+                <label class="settings-radio"><input type="radio" name="settings-theme" value="auto"> System</label>
+                <label class="settings-radio"><input type="radio" name="settings-theme" value="light"> Hell</label>
+                <label class="settings-radio"><input type="radio" name="settings-theme" value="dark"> Dunkel</label>
+              </fieldset>
+              <label class="settings-row">
+                <span>Sortierung Ergebnisse</span>
+                <select id="settings-results-sort">
+                  <option value="">Standard (Reihenfolge der Verarbeitung)</option>
+                  <option value="file_asc">Dateiname A-Z</option>
+                  <option value="supplier_asc">Lieferant A-Z</option>
+                  <option value="date_desc">Datum (neu zuerst)</option>
+                  <option value="date_asc">Datum (alt zuerst)</option>
+                </select>
+              </label>
+              <label class="settings-row settings-row-stack">
+                <span>Dateiname-Template (Welle 12)</span>
+                <input type="text" id="settings-filename-template" maxlength="200" placeholder="{supplier}_{date}_{doc_number}" />
+                <small class="settings-hint">
+                  Tokens: <code>{supplier}</code> <code>{date}</code> <code>{date_iso}</code> <code>{doc_number}</code> <code>{doctype}</code> <code>{year}</code> <code>{month}</code> <code>{day}</code>.
+                  Vorschau: <span id="settings-filename-preview" class="settings-preview">—</span>
+                </small>
+              </label>
+              <div class="settings-row settings-actions">
+                <button type="button" class="ghost" id="settings-reset-tour-btn">Tour beim nächsten Start wiederholen</button>
+                <span class="settings-status" id="settings-status" aria-live="polite"></span>
+              </div>
+            </div>
+          </section>
+          <div class="help-overlay-foot">
+            <button type="button" class="ghost" id="help-restart-tour-btn">Tour erneut starten</button>
+            <button type="button" class="action-button" data-help-close="1">Schließen</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tour-overlay" id="tour-overlay" hidden>
+      <div class="tour-spotlight" id="tour-spotlight"></div>
+      <div class="tour-card" id="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+        <h3 id="tour-title">Willkommen bei DocaroApp!</h3>
+        <p id="tour-text">Wir machen einen kurzen Rundgang.</p>
+        <div class="tour-progress" id="tour-progress">1 / 1</div>
+        <div class="tour-actions">
+          <button type="button" class="ghost" id="tour-skip-btn">Überspringen</button>
+          <button type="button" class="ghost" id="tour-prev-btn">Zurück</button>
+          <button type="button" class="action-button" id="tour-next-btn">Weiter</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    // Welle 5: Help-Overlay + First-Run-Tour (mit Welle-8 Focus-Trap)
+    (function () {
+      const helpOverlay = document.getElementById('help-overlay');
+      const helpOpenBtn = document.getElementById('help-open-btn');
+      const restartTourBtn = document.getElementById('help-restart-tour-btn');
+
+      // Welle 8: Focus-Trap-Helper
+      const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      let lastFocusedBeforeOverlay = null;
+      let activeTrapContainer = null;
+      function getFocusable(container) {
+        return Array.from(container.querySelectorAll(FOCUSABLE_SEL)).filter(function (el) {
+          return !el.hidden && el.offsetParent !== null;
+        });
+      }
+      function trapTabKey(ev) {
+        if (!activeTrapContainer || ev.key !== 'Tab') return;
+        const items = getFocusable(activeTrapContainer);
+        if (!items.length) { ev.preventDefault(); return; }
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        if (ev.shiftKey && active === first) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && active === last) { ev.preventDefault(); first.focus(); }
+        else if (!activeTrapContainer.contains(active)) { ev.preventDefault(); first.focus(); }
+      }
+      document.addEventListener('keydown', trapTabKey, true);
+      function activateTrap(container) {
+        lastFocusedBeforeOverlay = document.activeElement;
+        activeTrapContainer = container;
+        const items = getFocusable(container);
+        if (items.length) setTimeout(function () { items[0].focus(); }, 30);
+      }
+      function releaseTrap() {
+        activeTrapContainer = null;
+        if (lastFocusedBeforeOverlay && typeof lastFocusedBeforeOverlay.focus === 'function') {
+          try { lastFocusedBeforeOverlay.focus(); } catch (_) {}
+        }
+        lastFocusedBeforeOverlay = null;
+      }
+
+      function openHelp() {
+        if (!helpOverlay) return;
+        helpOverlay.hidden = false;
+        document.body.classList.add('overlay-open');
+        activateTrap(helpOverlay);
+      }
+      function closeHelp() {
+        if (!helpOverlay) return;
+        helpOverlay.hidden = true;
+        document.body.classList.remove('overlay-open');
+        releaseTrap();
+      }
+      if (helpOpenBtn) helpOpenBtn.addEventListener('click', openHelp);
+      document.addEventListener('click', function (ev) {
+        if (ev.target && ev.target.dataset && ev.target.dataset.helpClose === '1') closeHelp();
+      });
+
+      // ?-Tastenkuerzel oeffnet Help
+      document.addEventListener('keydown', function (ev) {
+        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+        const inField = tag === 'input' || tag === 'textarea' || tag === 'select' || (ev.target && ev.target.isContentEditable);
+        if (ev.key === '?' && !inField && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+          ev.preventDefault();
+          if (helpOverlay && !helpOverlay.hidden) closeHelp(); else openHelp();
+          return;
+        }
+        if (ev.key === 'Escape' && helpOverlay && !helpOverlay.hidden) {
+          closeHelp();
+        }
+      });
+
+      // ---- First-Run-Tour ----
+      const tourOverlay = document.getElementById('tour-overlay');
+      const tourSpot = document.getElementById('tour-spotlight');
+      const tourCard = document.getElementById('tour-card');
+      const tourTitle = document.getElementById('tour-title');
+      const tourText = document.getElementById('tour-text');
+      const tourProg = document.getElementById('tour-progress');
+      const tourPrev = document.getElementById('tour-prev-btn');
+      const tourNext = document.getElementById('tour-next-btn');
+      const tourSkip = document.getElementById('tour-skip-btn');
+
+      const steps = [
+        { title: 'Willkommen bei DocaroApp!', text: 'Diese kurze Tour zeigt dir die wichtigsten Funktionen. Du kannst jederzeit mit "Ueberspringen" abbrechen.', selector: null },
+        { title: 'PDFs verarbeiten', text: 'Hier kannst du PDFs hochladen oder den lokalen Eingangsordner verarbeiten lassen.', selector: '#upload-form, form[action*="upload"]' },
+        { title: 'Statistiken', text: 'Behalte Gesamtmenge, Heute-Zähler und Top-Lieferanten im Blick.', selector: '#stats-panel' },
+        { title: 'Suchen & Filtern', text: 'Tippe in das Suchfeld oder drücke "/". Status- und Doctype-Filter helfen, schnell die richtigen Dokumente zu finden.', selector: '#results-toolbar' },
+        { title: 'Mehrfachauswahl', text: 'Karten ankreuzen → die Bulk-Aktionsleiste erscheint und du kannst viele Dokumente auf einmal bearbeiten.', selector: '.result-card' },
+        { title: 'Hilfe jederzeit', text: 'Drücke "?" oder klicke auf "Hilfe" oben rechts, um diesen Hinweis und alle Tastenkürzel zu sehen.', selector: '#help-open-btn' },
+      ];
+      let idx = 0;
+
+      function positionTour(step) {
+        if (!step || !step.selector) {
+          tourSpot.style.display = 'none';
+          tourCard.style.left = '50%';
+          tourCard.style.top = '50%';
+          tourCard.style.transform = 'translate(-50%, -50%)';
+          return;
+        }
+        const el = document.querySelector(step.selector);
+        if (!el) {
+          tourSpot.style.display = 'none';
+          tourCard.style.left = '50%';
+          tourCard.style.top = '50%';
+          tourCard.style.transform = 'translate(-50%, -50%)';
+          return;
+        }
+        try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_e) {}
+        // Position erst nach kurzem Delay messen, damit scrollIntoView greift
+        setTimeout(function () {
+          const r = el.getBoundingClientRect();
+          tourSpot.style.display = 'block';
+          tourSpot.style.left = (r.left - 6) + 'px';
+          tourSpot.style.top = (r.top - 6) + 'px';
+          tourSpot.style.width = (r.width + 12) + 'px';
+          tourSpot.style.height = (r.height + 12) + 'px';
+          // Karte unterhalb / oberhalb platzieren
+          const cardRect = tourCard.getBoundingClientRect();
+          let top = r.bottom + 14;
+          if (top + cardRect.height > window.innerHeight - 16) {
+            top = Math.max(16, r.top - cardRect.height - 14);
+          }
+          let left = Math.max(16, Math.min(window.innerWidth - cardRect.width - 16, r.left));
+          tourCard.style.left = left + 'px';
+          tourCard.style.top = top + 'px';
+          tourCard.style.transform = 'none';
+        }, 250);
+      }
+
+      function renderStep() {
+        const step = steps[idx];
+        tourTitle.textContent = step.title;
+        tourText.textContent = step.text;
+        tourProg.textContent = (idx + 1) + ' / ' + steps.length;
+        tourPrev.disabled = idx === 0;
+        tourNext.textContent = idx === steps.length - 1 ? 'Fertig' : 'Weiter';
+        positionTour(step);
+      }
+
+      function openTour() {
+        idx = 0;
+        tourOverlay.hidden = false;
+        document.body.classList.add('overlay-open');
+        renderStep();
+        activateTrap(tourCard);
+      }
+      function closeTour(markDone) {
+        tourOverlay.hidden = true;
+        document.body.classList.remove('overlay-open');
+        releaseTrap();
+        if (markDone && window.DocaroDesktop && window.DocaroDesktop.savePref) {
+          window.DocaroDesktop.savePref({ tour_done: true });
+        }
+      }
+      tourPrev.addEventListener('click', function () { if (idx > 0) { idx -= 1; renderStep(); } });
+      tourNext.addEventListener('click', function () {
+        if (idx < steps.length - 1) { idx += 1; renderStep(); }
+        else { closeTour(true); }
+      });
+      tourSkip.addEventListener('click', function () { closeTour(true); });
+      if (restartTourBtn) {
+        restartTourBtn.addEventListener('click', function () { closeHelp(); openTour(); });
+      }
+
+      // Auto-Start fuer First-Run
+      if (window.DocaroDesktop && window.DocaroDesktop.loadPrefs) {
+        window.DocaroDesktop.loadPrefs().then(function (prefs) {
+          if (prefs && !prefs.tour_done) {
+            // kleine Verzoegerung, damit Layout fertig ist
+            setTimeout(openTour, 600);
+          }
+        }).catch(function () { /* still */ });
+      }
+
+      // Fenstergroesse → Spotlight neu positionieren
+      window.addEventListener('resize', function () {
+        if (!tourOverlay.hidden) renderStep();
+      });
+
+      // Welle 8: Esc schliesst Tour
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape' && tourOverlay && !tourOverlay.hidden) {
+          closeTour(true);
+        }
+      });
+    })();
+    </script>
+
+    <script>
+    // Welle 9: Datenpflege & Backup
+    (function () {
+      const section = document.getElementById('help-backup-section');
+      if (!section) return;
+      const isDesktop = !!(window.DocaroDesktop && window.DocaroDesktop.notify);
+      // Panel nur im Desktop-Modus zeigen (Web hat keinen lokalen Speicher)
+      if (isDesktop) section.hidden = false;
+
+      const listEl = document.getElementById('backup-list');
+      const createBtn = document.getElementById('backup-create-btn');
+      const importInput = document.getElementById('backup-import-input');
+      const exportLink = document.getElementById('backup-export-link');
+      let loaded = false;
+
+      function fmtSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+      }
+      function fmtTs(ts) {
+        // ts = "YYYYMMDD-HHMMSS"
+        const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(ts || '');
+        if (!m) return ts || '';
+        return m[3] + '.' + m[2] + '.' + m[1] + ' ' + m[4] + ':' + m[5];
+      }
+
+      function notifyMsg(msg, type) {
+        if (typeof window.notify === 'function') window.notify(msg, { type: type || 'info' });
+        else if (window.docaroToast) window.docaroToast(msg, { type: type || 'info' });
+      }
+
+      function render(items) {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        if (!items || !items.length) {
+          const empty = document.createElement('li');
+          empty.className = 'backup-list-empty';
+          empty.textContent = 'Noch keine Snapshots vorhanden.';
+          listEl.appendChild(empty);
+          return;
+        }
+        items.forEach(function (it) {
+          const li = document.createElement('li');
+          li.className = 'backup-list-item';
+          const meta = document.createElement('div');
+          meta.className = 'backup-list-meta';
+          meta.innerHTML = '<strong>' + fmtTs(it.created) + '</strong>'
+            + ' <span class="backup-size">' + fmtSize(it.size) + '</span>';
+          const actions = document.createElement('div');
+          actions.className = 'backup-list-actions';
+          const dl = document.createElement('a');
+          dl.href = '/api/desktop/backup/' + encodeURIComponent(it.name);
+          dl.className = 'link-button';
+          dl.textContent = 'Download';
+          dl.setAttribute('download', it.name);
+          const rm = document.createElement('button');
+          rm.type = 'button';
+          rm.className = 'link-button danger';
+          rm.textContent = 'Loeschen';
+          rm.addEventListener('click', function () {
+            if (!confirm('Snapshot ' + it.name + ' wirklich loeschen?')) return;
+            fetch('/api/desktop/backup/' + encodeURIComponent(it.name) + '/delete', {
+              method: 'POST',
+              credentials: 'same-origin',
+            }).then(function (r) { return r.json().catch(function () { return {}; }); })
+              .then(function (res) {
+                if (res && res.ok) { notifyMsg('Snapshot geloescht', 'success'); refresh(); }
+                else { notifyMsg((res && res.error) || 'Loeschen fehlgeschlagen', 'error'); }
+              }).catch(function () { notifyMsg('Netzwerkfehler beim Loeschen', 'error'); });
+          });
+          actions.appendChild(dl);
+          actions.appendChild(rm);
+          li.appendChild(meta);
+          li.appendChild(actions);
+          listEl.appendChild(li);
+        });
+      }
+
+      function refresh() {
+        return fetch('/api/desktop/backup', { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            loaded = true;
+            if (res && res.ok) render(res.backups || []);
+          })
+          .catch(function () { /* still */ });
+      }
+
+      if (createBtn) {
+        createBtn.addEventListener('click', function () {
+          createBtn.disabled = true;
+          fetch('/api/desktop/backup', { method: 'POST', credentials: 'same-origin' })
+            .then(function (r) { return r.json().catch(function () { return {}; }); })
+            .then(function (res) {
+              if (res && res.ok) notifyMsg('Snapshot erstellt: ' + (res.name || ''), 'success');
+              else notifyMsg((res && res.error) || 'Snapshot fehlgeschlagen', 'error');
+              return refresh();
+            })
+            .catch(function () { notifyMsg('Netzwerkfehler beim Snapshot', 'error'); })
+            .finally(function () { createBtn.disabled = false; });
+        });
+      }
+
+      if (importInput) {
+        importInput.addEventListener('change', function () {
+          const file = importInput.files && importInput.files[0];
+          if (!file) return;
+          if (!confirm('Backup einspielen? Vorhandene Einstellungen werden ueberschrieben (vorher wird automatisch ein Snapshot angelegt).')) {
+            importInput.value = '';
+            return;
+          }
+          const fd = new FormData();
+          fd.append('file', file);
+          fetch('/api/desktop/backup/import', {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+          }).then(function (r) { return r.json().catch(function () { return {}; }); })
+            .then(function (res) {
+              if (res && res.ok) {
+                notifyMsg('Backup eingespielt (' + (res.restored || []).join(', ') + ')', 'success');
+                setTimeout(function () { location.reload(); }, 1200);
+              } else {
+                notifyMsg((res && res.error) || 'Import fehlgeschlagen', 'error');
+              }
+            }).catch(function () { notifyMsg('Netzwerkfehler beim Import', 'error'); })
+            .finally(function () { importInput.value = ''; });
+        });
+      }
+
+      // Lazy laden, sobald Help-Overlay sichtbar wird
+      const helpOverlay = document.getElementById('help-overlay');
+      if (helpOverlay && isDesktop) {
+        const obs = new MutationObserver(function () {
+          if (!helpOverlay.hidden && !loaded) refresh();
+        });
+        obs.observe(helpOverlay, { attributes: true, attributeFilter: ['hidden'] });
+      }
+    })();
+    </script>
+
+    <!-- Welle 7: Toast-Engine + Offline-Banner -->
+    <script>
+    (function () {
+      const container = document.getElementById('docaro-toast-container');
+      if (!container) return;
+      function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+      function pushToast(msg, opts) {
+        const o = opts || {};
+        const type = o.type || 'info'; // info | success | warning | error
+        const timeout = typeof o.timeout === 'number' ? o.timeout : (type === 'error' ? 6000 : 3500);
+        const node = document.createElement('div');
+        node.className = 'docaro-toast docaro-toast--' + type;
+        node.setAttribute('role', type === 'error' ? 'alert' : 'status');
+        node.innerHTML = '<span class="docaro-toast-msg">' + escapeHtml(msg) + '</span>'
+          + '<button type="button" class="docaro-toast-close" aria-label="Schliessen">&times;</button>';
+        const close = function () {
+          node.classList.add('is-leaving');
+          setTimeout(function () { if (node.parentNode) node.parentNode.removeChild(node); }, 200);
+        };
+        node.querySelector('.docaro-toast-close').addEventListener('click', close);
+        container.appendChild(node);
+        if (timeout > 0) setTimeout(close, timeout);
+        return close;
+      }
+      window.docaroToast = pushToast;
+
+      // Offline-Banner
+      const banner = document.getElementById('docaro-offline-banner');
+      let lastOnline = navigator.onLine !== false;
+      function setOnline(online) {
+        if (online === lastOnline) return;
+        lastOnline = online;
+        if (banner) banner.hidden = online;
+        if (online) {
+          pushToast('Verbindung wiederhergestellt.', { type: 'success', timeout: 2500 });
+        } else {
+          pushToast('Offline: keine Verbindung zum Backend.', { type: 'warning', timeout: 4000 });
+        }
+      }
+      // Initial: navigator.onLine pruefen
+      if (banner && navigator.onLine === false) banner.hidden = false;
+      window.addEventListener('online', function () { setOnline(true); });
+      window.addEventListener('offline', function () { setOnline(false); });
+    })();
+    </script>
+
+    <script>
+    // Welle 11: Settings-UI (visueller Prefs-Editor + Theme)
+    (function () {
+      if (!window.DocaroDesktop || typeof window.DocaroDesktop.notify !== 'function') return;
+      const section = document.getElementById('help-settings-section');
+      const dateFmt = document.getElementById('settings-date-fmt');
+      const doctype = document.getElementById('settings-doctype');
+      const themeRadios = document.querySelectorAll('input[name="settings-theme"]');
+      const resetTourBtn = document.getElementById('settings-reset-tour-btn');
+      const statusEl = document.getElementById('settings-status');
+      const helpOverlay = document.getElementById('help-overlay');
+      const sortSelect = document.getElementById('settings-results-sort');
+      const tplInput = document.getElementById('settings-filename-template');
+      const tplPreview = document.getElementById('settings-filename-preview');
+      if (!section || !dateFmt || !doctype) return;
+      section.hidden = false;
+
+      let savedPrefs = null;
+      let saveTimer = null;
+      let suppressChange = false;
+
+      function applyTheme(mode) {
+        const root = document.documentElement;
+        // Synchronisiert mit existierendem dark-mode-Toggle (localStorage 'docaro-dark-mode')
+        if (mode === 'dark') {
+          root.classList.add('dark-mode');
+          try { localStorage.setItem('docaro-dark-mode', 'true'); } catch (_) {}
+        } else if (mode === 'light') {
+          root.classList.remove('dark-mode');
+          try { localStorage.setItem('docaro-dark-mode', 'false'); } catch (_) {}
+        } else {
+          // auto: System-Praeferenz, kein expliziter Override
+          try { localStorage.removeItem('docaro-dark-mode'); } catch (_) {}
+          const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          root.classList.toggle('dark-mode', !!prefersDark);
+        }
+      }
+      function setStatus(msg, type) {
+        if (!statusEl) return;
+        statusEl.textContent = msg || '';
+        statusEl.dataset.type = type || '';
+      }
+      function fillForm(prefs) {
+        suppressChange = true;
+        try {
+          if (prefs.last_date_fmt && dateFmt.querySelector('option[value="' + prefs.last_date_fmt + '"]')) {
+            dateFmt.value = prefs.last_date_fmt;
+          }
+          doctype.value = prefs.last_doctype || '';
+          const theme = prefs.ui_theme || 'auto';
+          themeRadios.forEach(function (r) { r.checked = (r.value === theme); });
+          applyTheme(theme);
+          if (sortSelect) sortSelect.value = prefs.results_sort || '';
+          if (tplInput) tplInput.value = prefs.filename_template || '';
+          updateTemplatePreview();
+          // Sortierung sofort auf vorhandene Karten anwenden
+          if (window.DocaroResults && typeof window.DocaroResults.applySort === 'function') {
+            window.DocaroResults.applySort(prefs.results_sort || '');
+          }
+        } finally {
+          suppressChange = false;
+        }
+      }
+      function load() {
+        return fetch('/api/desktop/prefs', { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok && j.prefs) {
+              savedPrefs = j.prefs;
+              fillForm(j.prefs);
+            }
+          }).catch(function () {});
+      }
+      function save(changes) {
+        setStatus('Speichere…', 'pending');
+        return fetch('/api/desktop/prefs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(changes),
+        }).then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok && j.prefs) {
+              savedPrefs = j.prefs;
+              setStatus('Gespeichert ✓', 'ok');
+              setTimeout(function () { setStatus(''); }, 1500);
+              if (changes.ui_theme) applyTheme(j.prefs.ui_theme);
+            } else {
+              setStatus((j && j.error) || 'Fehler', 'error');
+            }
+          }).catch(function () { setStatus('Netzwerkfehler', 'error'); });
+      }
+      function debounceSave(changes) {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(function () { save(changes); }, 350);
+      }
+
+      dateFmt.addEventListener('change', function () { if (!suppressChange) save({ last_date_fmt: dateFmt.value }); });
+      doctype.addEventListener('input', function () { if (!suppressChange) debounceSave({ last_doctype: doctype.value }); });
+      themeRadios.forEach(function (r) {
+        r.addEventListener('change', function () {
+          if (suppressChange || !r.checked) return;
+          applyTheme(r.value);
+          save({ ui_theme: r.value });
+        });
+      });
+      if (resetTourBtn) {
+        resetTourBtn.addEventListener('click', function () {
+          save({ tour_done: false }).then(function () {
+            setStatus('Tour startet beim nächsten Aufruf erneut.', 'ok');
+          });
+        });
+      }
+      if (sortSelect) {
+        sortSelect.addEventListener('change', function () {
+          if (suppressChange) return;
+          save({ results_sort: sortSelect.value });
+          if (window.DocaroResults && typeof window.DocaroResults.applySort === 'function') {
+            window.DocaroResults.applySort(sortSelect.value);
+          }
+          const toolbarSort = document.getElementById('results-sort');
+          if (toolbarSort && toolbarSort.value !== sortSelect.value) toolbarSort.value = sortSelect.value;
+        });
+      }
+      let tplPreviewTimer = null;
+      function updateTemplatePreview() {
+        if (!tplInput || !tplPreview) return;
+        const value = (tplInput.value || '').trim();
+        if (!value) { tplPreview.textContent = '— (Standard)'; tplPreview.dataset.valid = '1'; return; }
+        if (tplPreviewTimer) clearTimeout(tplPreviewTimer);
+        tplPreviewTimer = setTimeout(function () {
+          fetch('/api/desktop/naming/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ template: value }),
+          }).then(function (r) { return r.json(); }).then(function (j) {
+            if (j && j.valid) {
+              tplPreview.textContent = j.preview || '—';
+              tplPreview.dataset.valid = '1';
+            } else {
+              tplPreview.textContent = 'Ungültig (nur erlaubte Tokens nutzen)';
+              tplPreview.dataset.valid = '0';
+            }
+          }).catch(function () {
+            tplPreview.textContent = '—';
+            tplPreview.dataset.valid = '0';
+          });
+        }, 250);
+      }
+      if (tplInput) {
+        tplInput.addEventListener('input', function () {
+          updateTemplatePreview();
+          if (suppressChange) return;
+          debounceSave({ filename_template: tplInput.value });
+        });
+      }
+
+      // Lazy-Refresh wenn Help-Overlay geöffnet wird
+      if (helpOverlay) {
+        const obs = new MutationObserver(function () {
+          if (!helpOverlay.hidden) load();
+        });
+        obs.observe(helpOverlay, { attributes: true, attributeFilter: ['hidden'] });
+      }
+      // Initiales Laden, damit Theme von Anfang an passt
+      load();
+    })();
+    </script>
+
+    <script>
+    // Welle 12: Sortier-Presets + Datum-Range-Filter
+    (function () {
+      const cardsContainer = document.querySelector('.results-cards');
+      const sortSelect = document.getElementById('results-sort');
+      const dateFrom = document.getElementById('results-date-from');
+      const dateTo = document.getElementById('results-date-to');
+      const clearBtn = document.getElementById('results-daterange-clear');
+      if (!cardsContainer) return;
+
+      function getCards() { return Array.from(cardsContainer.querySelectorAll('.result-card')); }
+      function isoFromCard(card) {
+        const dateField = card.querySelector('[data-field="date"][data-iso-date]');
+        return dateField ? (dateField.dataset.isoDate || '').trim() : '';
+      }
+      function applySort(mode) {
+        if (!mode) return; // Standard => keine Aenderung
+        const cards = getCards();
+        const cmp = (a, b) => a.localeCompare(b, 'de', { sensitivity: 'base' });
+        cards.sort(function (a, b) {
+          if (mode === 'file_asc') return cmp(a.dataset.outName || '', b.dataset.outName || '');
+          if (mode === 'supplier_asc') return cmp(a.dataset.supplier || '', b.dataset.supplier || '');
+          if (mode === 'date_desc' || mode === 'date_asc') {
+            const ad = isoFromCard(a) || '';
+            const bd = isoFromCard(b) || '';
+            if (!ad && !bd) return 0;
+            if (!ad) return 1;
+            if (!bd) return -1;
+            return mode === 'date_asc' ? cmp(ad, bd) : cmp(bd, ad);
+          }
+          return 0;
+        });
+        const frag = document.createDocumentFragment();
+        cards.forEach(function (c) { frag.appendChild(c); });
+        cardsContainer.appendChild(frag);
+      }
+      function applyDateRange() {
+        const from = (dateFrom && dateFrom.value || '').trim();
+        const to = (dateTo && dateTo.value || '').trim();
+        getCards().forEach(function (card) {
+          const iso = isoFromCard(card);
+          let visible = true;
+          if (from && (!iso || iso < from)) visible = false;
+          if (to && (!iso || iso > to)) visible = false;
+          if (visible) card.removeAttribute('data-w12-hidden');
+          else card.setAttribute('data-w12-hidden', '1');
+          // Mit existierendem Suchfilter kombinierbar: nur eigenes Attr setzen,
+          // sichtbares display steuert eigentliche Toolbar; wir blenden via CSS aus.
+        });
+      }
+
+      if (sortSelect) {
+        sortSelect.addEventListener('change', function () {
+          applySort(sortSelect.value);
+          // Spiegelt zum Settings-Panel (falls offen)
+          const setSort = document.getElementById('settings-results-sort');
+          if (setSort && setSort.value !== sortSelect.value) setSort.value = sortSelect.value;
+          // Speichern via Settings-API (best-effort, funktioniert auch im Web-Mode)
+          fetch('/api/desktop/prefs', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin', body: JSON.stringify({ results_sort: sortSelect.value }),
+          }).catch(function () {});
+        });
+      }
+      if (dateFrom) dateFrom.addEventListener('change', applyDateRange);
+      if (dateTo) dateTo.addEventListener('change', applyDateRange);
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function () {
+          if (dateFrom) dateFrom.value = '';
+          if (dateTo) dateTo.value = '';
+          applyDateRange();
+        });
+      }
+      // Public API fuer Settings-IIFE
+      window.DocaroResults = window.DocaroResults || {};
+      window.DocaroResults.applySort = applySort;
+    })();
+    </script>
+
+    <script>
+    // Welle 10: Multi-User & Profile-Switching
+    (function () {
+      if (!window.DocaroDesktop || typeof window.DocaroDesktop.notify !== 'function') return;
+      const wrap = document.getElementById('profile-switcher');
+      const btn = document.getElementById('profile-switcher-btn');
+      const labelEl = document.getElementById('profile-switcher-label');
+      const menu = document.getElementById('profile-menu');
+      const list = document.getElementById('profile-menu-list');
+      const newInput = document.getElementById('profile-new-input');
+      const newBtn = document.getElementById('profile-new-btn');
+      const sep = wrap ? wrap.previousElementSibling : null;
+      if (!wrap || !btn || !menu || !list) return;
+      wrap.hidden = false;
+      if (sep && sep.hasAttribute('data-desktop-only')) sep.hidden = false;
+
+      let activeId = null;
+
+      function notifyMsg(msg, type) {
+        try { (window.docaroToast || function () {})(msg, { type: type || 'info' }); } catch (_) {}
+      }
+      function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+      function setMenuOpen(open) {
+        menu.hidden = !open;
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open && newInput) setTimeout(function () { newInput.focus(); }, 0);
+      }
+      function render(data) {
+        list.innerHTML = '';
+        const profiles = (data && data.profiles) || [];
+        activeId = (data && data.active) || null;
+        const activeProf = profiles.find(function (p) { return p.id === activeId; });
+        if (labelEl) labelEl.textContent = activeProf ? activeProf.label : 'Profil';
+        const max = (data && data.max) || 8;
+        profiles.forEach(function (prof) {
+          const li = document.createElement('li');
+          li.className = 'profile-menu-item' + (prof.id === activeId ? ' is-active' : '');
+          li.setAttribute('role', 'none');
+          li.innerHTML = '<button type="button" role="menuitemradio" data-action="activate" data-pid="' + escapeHtml(prof.id) + '" aria-checked="' + (prof.id === activeId ? 'true' : 'false') + '">'
+            + (prof.id === activeId ? '<span aria-hidden="true">✓</span> ' : '<span aria-hidden="true">&nbsp;&nbsp;</span> ')
+            + escapeHtml(prof.label) + '</button>'
+            + '<span class="profile-menu-actions">'
+            + '<button type="button" class="link-button" data-action="rename" data-pid="' + escapeHtml(prof.id) + '" title="Umbenennen">✎</button>'
+            + (profiles.length > 1 ? '<button type="button" class="link-button danger" data-action="delete" data-pid="' + escapeHtml(prof.id) + '" title="Löschen">×</button>' : '')
+            + '</span>';
+          list.appendChild(li);
+        });
+        if (newBtn) newBtn.disabled = profiles.length >= max;
+        if (newInput) newInput.placeholder = profiles.length >= max ? 'Maximum erreicht' : 'Neues Profil…';
+      }
+      function refresh() {
+        return fetch('/api/desktop/profiles', { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { if (j && j.ok) render(j); })
+          .catch(function () {});
+      }
+      function activate(pid) {
+        if (pid === activeId) { setMenuOpen(false); return; }
+        fetch('/api/desktop/profiles/' + encodeURIComponent(pid) + '/activate', { method: 'POST', credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok) {
+              notifyMsg('Profil gewechselt – wird neu geladen…', 'success');
+              setTimeout(function () { location.reload(); }, 600);
+            } else {
+              notifyMsg((j && j.error) || 'Wechsel fehlgeschlagen', 'error');
+            }
+          }).catch(function () { notifyMsg('Netzwerkfehler', 'error'); });
+      }
+      function createProfile() {
+        const label = (newInput && newInput.value || '').trim();
+        if (!label) { if (newInput) newInput.focus(); return; }
+        fetch('/api/desktop/profiles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ label: label }),
+        }).then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok) {
+              if (newInput) newInput.value = '';
+              notifyMsg('Profil "' + label + '" angelegt', 'success');
+              refresh();
+            } else {
+              notifyMsg((j && j.error) || 'Anlage fehlgeschlagen', 'error');
+            }
+          }).catch(function () { notifyMsg('Netzwerkfehler', 'error'); });
+      }
+      function renameProfile(pid) {
+        const next = window.prompt('Neuer Name:');
+        if (next == null) return;
+        const label = next.trim();
+        if (!label) return;
+        fetch('/api/desktop/profiles/' + encodeURIComponent(pid) + '/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ label: label }),
+        }).then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok) { notifyMsg('Profil umbenannt', 'success'); refresh(); }
+            else notifyMsg((j && j.error) || 'Umbenennen fehlgeschlagen', 'error');
+          }).catch(function () { notifyMsg('Netzwerkfehler', 'error'); });
+      }
+      function deleteProfile(pid) {
+        if (!window.confirm('Profil wirklich löschen? Alle zugehörigen Daten und Backups werden entfernt.')) return;
+        fetch('/api/desktop/profiles/' + encodeURIComponent(pid) + '/delete', { method: 'POST', credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j && j.ok) {
+              notifyMsg('Profil gelöscht', 'success');
+              if (pid === activeId) { setTimeout(function () { location.reload(); }, 600); }
+              else { refresh(); }
+            } else {
+              notifyMsg((j && j.error) || 'Loeschen fehlgeschlagen', 'error');
+            }
+          }).catch(function () { notifyMsg('Netzwerkfehler', 'error'); });
+      }
+
+      btn.addEventListener('click', function () { setMenuOpen(menu.hidden); if (!menu.hidden) refresh(); });
+      document.addEventListener('click', function (ev) {
+        if (menu.hidden) return;
+        if (wrap.contains(ev.target)) return;
+        setMenuOpen(false);
+      });
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape' && !menu.hidden) { setMenuOpen(false); btn.focus(); }
+      });
+      list.addEventListener('click', function (ev) {
+        const t = ev.target.closest('button[data-action]');
+        if (!t) return;
+        const pid = t.getAttribute('data-pid');
+        const action = t.getAttribute('data-action');
+        if (action === 'activate') activate(pid);
+        else if (action === 'rename') renameProfile(pid);
+        else if (action === 'delete') deleteProfile(pid);
+      });
+      if (newBtn) newBtn.addEventListener('click', createProfile);
+      if (newInput) newInput.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); createProfile(); }
+      });
+
+      refresh();
+    })();
+    </script>
+
+    <!-- Welle 13C: Trash-Bin Modal -->
+    <div id="trash-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="trash-modal-title">
+      <div class="modal-backdrop" data-trash-close></div>
+      <div class="modal-content trash-modal-content" role="document">
+        <header class="modal-header">
+          <h2 id="trash-modal-title">Papierkorb</h2>
+          <button type="button" class="ghost" data-trash-close aria-label="Schliessen">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="settings-hint" id="trash-retention-hint">Eintraege werden nach 7 Tagen automatisch endgueltig geloescht.</p>
+          <div id="trash-empty-state" class="settings-hint" hidden>Papierkorb ist leer.</div>
+          <ul id="trash-list" class="trash-list" aria-live="polite"></ul>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="ghost" id="trash-empty-btn">Papierkorb leeren</button>
+          <button type="button" class="ghost" data-trash-close>Schliessen</button>
+        </footer>
+      </div>
+    </div>
+
+    <script>
+    // Welle 13B + 13C: Saved-Searches + Trash-Bin
+    (function () {
+      const sel = document.getElementById('saved-searches-select');
+      const saveBtn = document.getElementById('saved-search-save');
+      const delBtn = document.getElementById('saved-search-delete');
+      const trashBtn = document.getElementById('open-trash-btn');
+      if (!sel && !trashBtn) return;
+
+      function getJSON(url, options) {
+        return fetch(url, Object.assign({ credentials: 'same-origin' }, options || {}))
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); });
+      }
+      function postJSON(url, body) {
+        return getJSON(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {}),
+        });
+      }
+      function notify(msg, type) {
+        try { (window.docaroToast || function () {})(msg, { type: type || 'info' }); } catch (_) {}
+      }
+      function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+      }
+
+      // -------------------- Saved Searches --------------------
+      let savedSearches = [];
+
+      function refreshSaved() {
+        if (!sel) return Promise.resolve();
+        return getJSON('/api/desktop/searches').then(function (res) {
+          if (!res.ok) return;
+          savedSearches = (res.body && res.body.searches) || [];
+          const current = sel.value;
+          sel.innerHTML = '<option value="">– waehlen –</option>';
+          savedSearches.forEach(function (s) {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            sel.appendChild(opt);
+          });
+          if (current && savedSearches.some(function (s) { return s.id === current; })) {
+            sel.value = current;
+          }
+          updateDelBtn();
+        }).catch(function () {});
+      }
+
+      function updateDelBtn() {
+        if (delBtn) delBtn.disabled = !sel || !sel.value;
+      }
+
+      function gatherCurrentFilters() {
+        const search = document.getElementById('results-search');
+        const status = document.getElementById('results-status');
+        const doctype = document.getElementById('results-doctype');
+        const sortEl = document.getElementById('results-sort');
+        const dFrom = document.getElementById('results-date-from');
+        const dTo = document.getElementById('results-date-to');
+        return {
+          query: (search && search.value || '').trim(),
+          status: (status && status.value || '').trim(),
+          doctype: (doctype && doctype.value || '').trim(),
+          sort: (sortEl && sortEl.value || '').trim(),
+          date_from: (dFrom && dFrom.value || '').trim(),
+          date_to: (dTo && dTo.value || '').trim(),
+        };
+      }
+
+      function applyFilters(s) {
+        if (!s) return;
+        const search = document.getElementById('results-search');
+        const status = document.getElementById('results-status');
+        const doctype = document.getElementById('results-doctype');
+        const sortEl = document.getElementById('results-sort');
+        const dFrom = document.getElementById('results-date-from');
+        const dTo = document.getElementById('results-date-to');
+        if (search) { search.value = s.query || ''; search.dispatchEvent(new Event('input', { bubbles: true })); }
+        if (status) { status.value = s.status || ''; status.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (doctype) { doctype.value = s.doctype || ''; doctype.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (sortEl) { sortEl.value = s.sort || ''; sortEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (dFrom) { dFrom.value = s.date_from || ''; dFrom.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (dTo) { dTo.value = s.date_to || ''; dTo.dispatchEvent(new Event('change', { bubbles: true })); }
+      }
+
+      if (sel) {
+        sel.addEventListener('change', function () {
+          updateDelBtn();
+          if (!sel.value) return;
+          const s = savedSearches.find(function (x) { return x.id === sel.value; });
+          if (s) applyFilters(s);
+        });
+      }
+      if (saveBtn) {
+        saveBtn.addEventListener('click', function () {
+          const name = (window.prompt('Name fuer die Suche:') || '').trim();
+          if (!name) return;
+          const payload = Object.assign({ name: name }, gatherCurrentFilters());
+          postJSON('/api/desktop/searches', payload).then(function (res) {
+            if (!res.ok) { notify((res.body && res.body.error) || 'Speichern fehlgeschlagen.', 'error'); return; }
+            notify('Suche gespeichert.', 'success');
+            refreshSaved().then(function () {
+              if (sel && res.body && res.body.search) sel.value = res.body.search.id;
+              updateDelBtn();
+            });
+          }).catch(function () { notify('Netzwerkfehler.', 'error'); });
+        });
+      }
+      if (delBtn) {
+        delBtn.addEventListener('click', function () {
+          if (!sel || !sel.value) return;
+          const s = savedSearches.find(function (x) { return x.id === sel.value; });
+          if (!s) return;
+          if (!window.confirm('Suche "' + s.name + '" loeschen?')) return;
+          postJSON('/api/desktop/searches/' + encodeURIComponent(s.id) + '/delete', {}).then(function (res) {
+            if (!res.ok) { notify((res.body && res.body.error) || 'Loeschen fehlgeschlagen.', 'error'); return; }
+            notify('Suche geloescht.', 'success');
+            refreshSaved();
+          });
+        });
+      }
+
+      refreshSaved();
+
+      // -------------------- Trash --------------------
+      const modal = document.getElementById('trash-modal');
+      const list = document.getElementById('trash-list');
+      const emptyState = document.getElementById('trash-empty-state');
+      const emptyBtn = document.getElementById('trash-empty-btn');
+      const retentionHint = document.getElementById('trash-retention-hint');
+
+      function openModal() { if (modal) modal.hidden = false; refreshTrash(); }
+      function closeModal() { if (modal) modal.hidden = true; }
+
+      function refreshTrash() {
+        if (!list) return;
+        list.innerHTML = '';
+        getJSON('/api/desktop/trash').then(function (res) {
+          if (!res.ok) { notify('Trash konnte nicht geladen werden.', 'error'); return; }
+          const items = (res.body && res.body.items) || [];
+          const days = (res.body && res.body.retention_days) || 7;
+          if (retentionHint) retentionHint.textContent = 'Eintraege werden nach ' + days + ' Tagen automatisch endgueltig geloescht.';
+          if (emptyState) emptyState.hidden = items.length > 0;
+          items.forEach(function (it) {
+            const li = document.createElement('li');
+            li.className = 'trash-item';
+            const meta = it.metadata || {};
+            const supplier = meta.supplier || '–';
+            const doctype = meta.doc_type || '';
+            const isoDate = meta.iso_date || '';
+            li.innerHTML = ''
+              + '<div class="trash-item-info">'
+              + '<strong>' + escapeHtml(it.original_name || it.stored_name || '') + '</strong>'
+              + '<span class="trash-item-meta">' + escapeHtml(supplier)
+              + (doctype ? ' · ' + escapeHtml(doctype) : '')
+              + (isoDate ? ' · ' + escapeHtml(isoDate) : '')
+              + ' · geloescht ' + escapeHtml(it.deleted_at || '') + '</span>'
+              + '</div>'
+              + '<div class="trash-item-actions">'
+              + '<button type="button" class="ghost" data-trash-restore="' + escapeHtml(it.id) + '">Wiederherstellen</button>'
+              + '<button type="button" class="ghost" data-trash-purge="' + escapeHtml(it.id) + '">Endgueltig</button>'
+              + '</div>';
+            list.appendChild(li);
+          });
+        }).catch(function () { notify('Netzwerkfehler.', 'error'); });
+      }
+
+      if (modal) {
+        modal.addEventListener('click', function (ev) {
+          const t = ev.target;
+          if (!t) return;
+          if (t.matches('[data-trash-close]')) { closeModal(); return; }
+          const restoreId = t.getAttribute('data-trash-restore');
+          if (restoreId) {
+            postJSON('/api/desktop/trash/' + encodeURIComponent(restoreId) + '/restore', {}).then(function (res) {
+              if (!res.ok) { notify((res.body && res.body.error) || 'Wiederherstellen fehlgeschlagen.', 'error'); return; }
+              notify('Wiederhergestellt.', 'success');
+              refreshTrash();
+            });
+            return;
+          }
+          const purgeId = t.getAttribute('data-trash-purge');
+          if (purgeId) {
+            if (!window.confirm('Eintrag endgueltig loeschen?')) return;
+            postJSON('/api/desktop/trash/' + encodeURIComponent(purgeId) + '/delete', {}).then(function (res) {
+              if (!res.ok) { notify((res.body && res.body.error) || 'Loeschen fehlgeschlagen.', 'error'); return; }
+              notify('Endgueltig geloescht.', 'success');
+              refreshTrash();
+            });
+          }
+        });
+      }
+      if (emptyBtn) {
+        emptyBtn.addEventListener('click', function () {
+          if (!window.confirm('Papierkorb komplett leeren?')) return;
+          postJSON('/api/desktop/trash/empty', {}).then(function (res) {
+            if (!res.ok) { notify('Leeren fehlgeschlagen.', 'error'); return; }
+            notify('Papierkorb geleert.', 'success');
+            refreshTrash();
+          });
+        });
+      }
+      if (trashBtn) trashBtn.addEventListener('click', openModal);
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape' && modal && !modal.hidden) closeModal();
+      });
+    })();
     </script>
   </body>
 </html>

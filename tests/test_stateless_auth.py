@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from flask import Flask
 
 from core.runtime_state import RuntimeStateConfig, reset_runtime_state
@@ -52,36 +51,52 @@ def test_reset_runtime_state_clears_runtime_not_ml(tmp_path: Path):
 
 def test_auth_requires_login_and_allows_login(tmp_path: Path):
     db_path = tmp_path / "auth.db"
+    import os
 
-    app = Flask(__name__)
-    app.secret_key = "test"
+    previous_auth_required = os.environ.get("DOCARO_AUTH_REQUIRED")
+    previous_allow_register = os.environ.get("DOCARO_ALLOW_SELF_REGISTER")
+    os.environ["DOCARO_AUTH_REQUIRED"] = "1"
+    os.environ["DOCARO_ALLOW_SELF_REGISTER"] = "0"
 
-    # Protected route
-    @app.get("/")
-    def index():
-        return "ok"
+    try:
+        app = Flask(__name__)
+        app.secret_key = "test"
 
-    # Install auth (adds /login,/logout,/health and global guard)
-    install_auth(app, db_path)
+        # Protected route
+        @app.get("/")
+        def index():
+            return "ok"
 
-    # Seed a user
-    create_user(db_path, "user@example.com", "pw")
+        # Install auth (adds /login,/logout,/health and global guard)
+        install_auth(app, db_path)
 
-    client = app.test_client()
+        # Seed a user
+        create_user(db_path, "user@example.com", "pw")
 
-    # Unauthenticated -> redirect to /login
-    r = client.get("/")
-    assert r.status_code in (301, 302)
-    assert "/login" in (r.headers.get("Location") or "")
+        client = app.test_client()
 
-    # Login
-    r2 = client.post("/login", data={"email": "user@example.com", "password": "pw"})
-    assert r2.status_code in (301, 302)
+        # Unauthenticated -> redirect to /login
+        r = client.get("/")
+        assert r.status_code in (301, 302)
+        assert "/login" in (r.headers.get("Location") or "")
 
-    # Authenticated -> ok
-    r3 = client.get("/")
-    assert r3.status_code == 200
-    assert r3.data == b"ok"
+        # Login
+        r2 = client.post("/login", data={"email": "user@example.com", "password": "pw"})
+        assert r2.status_code in (301, 302)
+
+        # Authenticated -> ok
+        r3 = client.get("/")
+        assert r3.status_code == 200
+        assert r3.data == b"ok"
+    finally:
+        if previous_auth_required is None:
+            os.environ.pop("DOCARO_AUTH_REQUIRED", None)
+        else:
+            os.environ["DOCARO_AUTH_REQUIRED"] = previous_auth_required
+        if previous_allow_register is None:
+            os.environ.pop("DOCARO_ALLOW_SELF_REGISTER", None)
+        else:
+            os.environ["DOCARO_ALLOW_SELF_REGISTER"] = previous_allow_register
 
 
 def test_password_is_hashed(tmp_path: Path):

@@ -8,7 +8,7 @@ import re
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
-from services.auth_store import create_user, ensure_seed_user, get_user_by_email, get_user_by_id, init_auth_db, verify_password
+from services.auth_store import create_user, ensure_seed_user, get_user_by_email, init_auth_db, verify_password
 
 
 def _wants_json() -> bool:
@@ -19,6 +19,13 @@ def _wants_json() -> bool:
 
 
 _EMAIL_BASIC_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _validate_registration(email: str, password: str, password_confirm: str) -> Optional[str]:
@@ -47,7 +54,11 @@ def install_auth(
     if seed_email and seed_password:
         ensure_seed_user(auth_db_path, seed_email, seed_password)
 
-    allow_self_register = os.getenv("DOCARO_ALLOW_SELF_REGISTER", "1") == "1"
+    auth_required = _env_flag("DOCARO_AUTH_REQUIRED", True)
+    allow_self_register = _env_flag("DOCARO_ALLOW_SELF_REGISTER", False)
+    public_metrics = _env_flag("DOCARO_METRICS_PUBLIC", False)
+    public_health = _env_flag("DOCARO_HEALTH_PUBLIC", True)
+    metrics_token = (os.getenv("DOCARO_METRICS_TOKEN") or "").strip()
 
     @app.get("/health")
     def health():
@@ -67,7 +78,12 @@ def install_auth(
         if not user:
             if _wants_json():
                 return jsonify({"ok": False, "error": "invalid_credentials"}), 401
-            return render_template("login.html", error="Ungültige Login-Daten.", allow_self_register=allow_self_register), 401
+            return (
+                render_template("login.html", error="Ungültige Login-Daten.", allow_self_register=allow_self_register),
+                401,
+            )
+        session.clear()
+        session.permanent = True
         session["user_id"] = user.id
         session["user_email"] = user.email
         session["user_role"] = user.role or "user"
@@ -86,7 +102,12 @@ def install_auth(
         if not allow_self_register:
             if _wants_json():
                 return jsonify({"ok": False, "error": "registration_disabled"}), 403
-            return render_template("login.html", error="Registrierung ist deaktiviert.", allow_self_register=allow_self_register), 403
+            return (
+                render_template(
+                    "login.html", error="Registrierung ist deaktiviert.", allow_self_register=allow_self_register
+                ),
+                403,
+            )
 
         email = (request.form.get("email") or "").strip().lower()
         password = request.form.get("password") or ""
@@ -110,6 +131,8 @@ def install_auth(
                 return jsonify({"ok": False, "error": "registration_failed"}), 500
             return render_template("register.html", error="Registrierung fehlgeschlagen.", email=email), 500
 
+        session.clear()
+        session.permanent = True
         session["user_id"] = user.id
         session["user_email"] = user.email
         session["user_role"] = user.role or "user"
@@ -125,33 +148,26 @@ def install_auth(
         "login_submit",
         "register_page",
         "register_submit",
-        "health",
-        "metrics_endpoint",
         "static",
     }
 
+    if public_health:
+        public_endpoints.add("health")
+    if public_metrics or metrics_token:
+        public_endpoints.add("metrics_endpoint")
+
     @app.before_request
     def _require_auth():
+        if not auth_required:
+            return None
         endpoint = request.endpoint or ""
-        if not endpoint:
-            return None
-        if endpoint.startswith("static"):
-            return None
         if endpoint in public_endpoints:
             return None
-        user_id = session.get("user_id")
-        if not user_id:
-            if _wants_json():
-                return jsonify({"ok": False, "error": "auth_required"}), 401
-            return redirect(url_for("login_page"))
-        user = get_user_by_id(auth_db_path, int(user_id))
-        if not user:
-            session.clear()
-            if _wants_json():
-                return jsonify({"ok": False, "error": "auth_required"}), 401
-            return redirect(url_for("login_page"))
-        session["user_role"] = user.role or "user"
-        return None
+        if session.get("user_id"):
+            return None
+        if _wants_json():
+            return jsonify({"ok": False, "error": "auth_required"}), 401
+        return redirect(url_for("login_page"))
 
 
 def login_required(fn: Callable):

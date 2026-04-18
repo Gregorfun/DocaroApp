@@ -1,6 +1,6 @@
-# Neues GitHub-Repo für Docaro aufsetzen
+# Neues GitHub-Repo fuer DocaroApp aufsetzen
 
-Wenn das ursprüngliche Remote-Repo nicht mehr existiert, kannst du dieses Repo lokal weiterverwenden und einfach auf ein **neues** GitHub-Repository pushen.
+Wenn das urspruengliche Remote-Repo nicht mehr existiert, kannst du dieses Repo lokal weiterverwenden und einfach auf ein **neues** GitHub-Repository pushen.
 
 ## Voraussetzungen
 
@@ -22,12 +22,12 @@ Wichtig:
 
 Auf GitHub:
 - „New repository“
-- Name z.B. `docaro`
+- Name z.B. `DocaroApp`
 - **Ohne** README/.gitignore/License initialisieren (damit es wirklich leer ist)
 
 Merke dir die Repo-URL, z.B.:
-- SSH: `git@github.com:<ORG_ODER_USER>/docaro.git`
-- HTTPS: `https://github.com/<ORG_ODER_USER>/docaro.git`
+- SSH: `git@github.com:<ORG_ODER_USER>/DocaroApp.git`
+- HTTPS: `https://github.com/<ORG_ODER_USER>/DocaroApp.git`
 
 ## 3) Altes Remote ersetzen
 
@@ -46,7 +46,7 @@ git remote remove origin
 Neues Remote setzen:
 
 ```bash
-git remote add origin git@github.com:<ORG_ODER_USER>/docaro.git
+git remote add origin git@github.com:<ORG_ODER_USER>/DocaroApp.git
 ```
 
 ## 4) Branch-Name und Push

@@ -89,11 +89,17 @@ class QueueRuntimeManager:
         if self.is_processing(user_scope):
             return InboxDecision(False, "Es läuft bereits eine Verarbeitung.")
 
-        if int(self.q.count) >= self.queue_max_depth:
+        queue_depth = 0
+        try:
+            queue_depth = int(self.q.count)
+        except Exception as exc:
+            self.count_step_error("queue_depth", exc)
+
+        if queue_depth >= self.queue_max_depth:
             return InboxDecision(
                 False,
                 (
-                    f"Queue ist ausgelastet ({int(self.q.count)} Jobs >= Limit {self.queue_max_depth}). "
+                    f"Queue ist ausgelastet ({queue_depth} Jobs >= Limit {self.queue_max_depth}). "
                     "Bitte später erneut versuchen."
                 ),
             )

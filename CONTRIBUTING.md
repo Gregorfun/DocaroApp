@@ -1,14 +1,14 @@
-# Entwicklerhandbuch für Docaro
+# Entwicklerhandbuch fuer DocaroApp
 
-Vielen Dank für Ihr Interesse an der Mitarbeit an Docaro!
+Vielen Dank fuer Ihr Interesse an der Mitarbeit an DocaroApp!
 
 ## Entwicklungsumgebung einrichten
 
 ### 1. Repository klonen
 
 ```bash
-git clone https://github.com/Gregorfun/Docaro.git
-cd Docaro
+git clone https://github.com/Gregorfun/DocaroApp.git
+cd DocaroApp
 ```
 
 ### 2. Virtuelle Umgebung erstellen
