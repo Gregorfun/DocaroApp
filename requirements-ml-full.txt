@@ -42,7 +42,7 @@ docling-core>=2.50.0
 paddleocr
 
 # Label Studio
-label-studio>=1.10.0
+label-studio>=1.15.0
 label-studio-sdk>=0.0.30
 
 # Monitoring & Logging
